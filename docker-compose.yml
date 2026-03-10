@@ -1,0 +1,43 @@
+# TrustMem — MatrixOne Database
+#
+# Usage:
+#   docker compose up -d          # Start
+#   docker compose down            # Stop (data preserved)
+#   docker compose logs -f         # View logs
+#   docker compose ps              # Check health status
+#
+# Configuration:
+#   Copy .env.example to .env and edit as needed.
+#   All settings have sensible defaults — works out of the box.
+#
+# Data persistence:
+#   Data is stored in ./data/matrixone/ by default.
+#   Change MO_DATA_DIR in .env to use a different location.
+
+services:
+  matrixone:
+    image: ${MO_IMAGE:-matrixorigin/matrixone:latest}
+    container_name: ${MO_CONTAINER_NAME:-trustmem-matrixone}
+    hostname: matrixone
+    ports:
+      - "${MO_PORT:-6001}:6001"
+    volumes:
+      - ${MO_DATA_DIR:-./data/matrixone}:/mo-data
+    environment:
+      - TZ=${TZ:-UTC}
+    deploy:
+      resources:
+        limits:
+          memory: ${MO_MEMORY_LIMIT:-2g}
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -P6001 -uroot -p111 -e 'SELECT 1' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: ${MO_LOG_MAX_SIZE:-10m}
+        max-file: "${MO_LOG_MAX_FILES:-3}"
