@@ -3,26 +3,42 @@
   
   # TrustMem
   
-  **Persistent memory for AI coding tools**
+  **Persistent Memory Layer for AI Agents**
   
-  Your AI assistant remembers across conversations
+  > Semantic memory persistence • Vector-based retrieval • Cross-session context
   
-  [![MatrixOne](https://img.shields.io/badge/Powered%20by-MatrixOne-00ADD8?style=flat-square)](https://github.com/matrixorigin/matrixone)
+  [![MatrixOne](https://img.shields.io/badge/Powered%20by-MatrixOne-00ADD8?style=flat-square&logo=database)](https://github.com/matrixorigin/matrixone)
+  [![MCP](https://img.shields.io/badge/Protocol-MCP-7C3AED?style=flat-square)](https://modelcontextprotocol.io)
   [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
   
-  [Quick Start](#quick-start) • [Features](#features) • [Documentation](#commands)
+  [Quick Start](#quick-start) • [Architecture](#architecture) • [API Reference](#api-reference)
   
 </div>
 
 ---
 
-## 🎯 What is TrustMem?
+## 🧠 Overview
 
-TrustMem gives your AI coding assistant **long-term memory**. It remembers your preferences, project decisions, and workflows across all conversations.
+TrustMem implements a **persistent memory substrate** for AI coding agents, enabling stateful interactions across conversation boundaries.
 
-**Supported Tools:** [Kiro](https://kiro.dev) • [Cursor](https://cursor.sh) • [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+```mermaid
+graph LR
+    A[AI Agent] -->|MCP Protocol| B[TrustMem]
+    B -->|Vector Search| C[MatrixOne]
+    B -->|Semantic Embedding| D[Local/OpenAI]
+    C -->|Retrieval| B
+    B -->|Context| A
+```
 
-**Powered by:** [MatrixOne](https://github.com/matrixorigin/matrixone) with vector search for semantic retrieval
+**Core Capabilities:**
+- 🔍 **Semantic Retrieval** — Vector similarity search with configurable embedding providers
+- 🔄 **State Management** — Snapshot/rollback and branch-based memory isolation
+- 🛡️ **Self-Governance** — Automated contradiction detection and confidence scoring
+- 🔌 **Protocol-Native** — Built on Model Context Protocol (MCP) standard
+
+**Supported Agents:** [Kiro](https://kiro.dev) • [Cursor](https://cursor.sh) • [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+
+**Storage Backend:** [MatrixOne](https://github.com/matrixorigin/matrixone) — Distributed database with native vector indexing
 
 ## How It Works
 
