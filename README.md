@@ -1,12 +1,28 @@
-<p align="center">
-  <img src="assets/logo.jpg" alt="TrustMem Logo" width="200"/>
-</p>
+<div align="center">
+  <img src="assets/logo.jpg" alt="TrustMem Logo" width="180"/>
+  
+  # TrustMem
+  
+  **Persistent memory for AI coding tools**
+  
+  Your AI assistant remembers across conversations
+  
+  [![MatrixOne](https://img.shields.io/badge/Powered%20by-MatrixOne-00ADD8?style=flat-square)](https://github.com/matrixorigin/matrixone)
+  [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
+  
+  [Quick Start](#quick-start) • [Features](#features) • [Documentation](#commands)
+  
+</div>
 
-# TrustMem
+---
 
-Persistent memory for AI coding tools — your AI assistant remembers across conversations.
+## 🎯 What is TrustMem?
 
-Works with **[Kiro](https://kiro.dev)**, **[Cursor](https://cursor.sh)**, and **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)**. Stores memories in [MatrixOne](https://github.com/matrixorigin/matrixone) with vector search for semantic retrieval.
+TrustMem gives your AI coding assistant **long-term memory**. It remembers your preferences, project decisions, and workflows across all conversations.
+
+**Supported Tools:** [Kiro](https://kiro.dev) • [Cursor](https://cursor.sh) • [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+
+**Powered by:** [MatrixOne](https://github.com/matrixorigin/matrixone) with vector search for semantic retrieval
 
 ## How It Works
 
