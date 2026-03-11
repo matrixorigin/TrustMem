@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "memoria"
-version = "0.2.10"
+name = "mo-memoria"
+version = "0.1.0"
 description = "Multi-tenant memory service for AI assistants"
 readme = "README.md"
 requires-python = ">=3.11"

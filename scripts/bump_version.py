@@ -46,7 +46,9 @@ def main() -> None:
     if not m:
         sys.exit("Cannot find _VERSION in memoria/cli.py")
     old = m.group(1)
-    new = bump(old, part)
+
+    # Support direct version string (e.g. "0.1.0") or bump type (patch/minor/major)
+    new = part if re.match(r'^\d+\.\d+\.\d+$', part) else bump(old, part)
 
     for relpath, pattern in FILES:
         path = ROOT / relpath
