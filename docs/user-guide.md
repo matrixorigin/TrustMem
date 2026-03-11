@@ -1,0 +1,263 @@
+# User Guide
+
+## How It Works
+
+Memoria is a **headless memory backend**. It stores and retrieves memories for AI assistants and applications. There is no user registration UI — an admin creates users and issues API keys, then users (or their applications) authenticate with those keys.
+
+```
+Admin creates user → issues API key → user/app authenticates with key → store/retrieve memories
+```
+
+## Getting an API Key
+
+Your platform admin creates your account:
+
+```bash
+curl -X POST https://memoria-host:8100/auth/keys \
+  -H "Authorization: Bearer ADMIN_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "alice", "name": "alice-laptop"}'
+```
+
+The response includes a `raw_key` (shown only once). This is your API key.
+
+You can have multiple keys (e.g., one per device). List them:
+```bash
+curl https://memoria-host:8100/auth/keys \
+  -H "Authorization: Bearer sk-your-key..."
+```
+
+Revoke a key:
+```bash
+curl -X DELETE https://memoria-host:8100/auth/keys/KEY_ID \
+  -H "Authorization: Bearer sk-your-key..."
+```
+
+---
+
+## For AI Assistants (MCP)
+
+Add Memoria as an MCP server in your assistant's config. No installation needed — just a JSON block.
+
+### Claude Desktop
+
+Edit `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "python",
+      "args": [
+        "-m", "memoria.mcp.server",
+        "--api-url", "https://memoria-host:8100",
+        "--api-key", "sk-your-key..."
+      ]
+    }
+  }
+}
+```
+
+### Cursor
+
+Edit `.cursor/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "python",
+      "args": [
+        "-m", "memoria.mcp.server",
+        "--api-url", "https://memoria-host:8100",
+        "--api-key", "sk-your-key..."
+      ]
+    }
+  }
+}
+```
+
+### Available MCP Tools
+
+Once connected, your AI assistant can use these 11 tools:
+
+| Tool | Description |
+|------|-------------|
+| `memory_store` | Store a memory (fact, preference, decision) |
+| `memory_retrieve` | Retrieve relevant memories for a query |
+| `memory_search` | Semantic search over all memories |
+| `memory_correct` | Correct an existing memory |
+| `memory_purge` | Delete a memory |
+| `memory_profile` | Get memory profile and stats |
+| `memory_snapshot` | Create a read-only snapshot |
+| `memory_snapshots` | List all snapshots |
+| `memory_snapshot_diff` | Compare snapshot with current state |
+| `memory_consolidate` | Detect contradictions, fix orphans (30min cooldown) |
+| `memory_reflect` | Synthesize insights from memory clusters (2h cooldown) |
+
+---
+
+## For Applications (REST API)
+
+Standard HTTP with Bearer token auth. Works with any language.
+
+### Python
+
+```python
+import httpx
+
+client = httpx.Client(
+    base_url="https://memoria-host:8100",
+    headers={"Authorization": "Bearer sk-your-key..."},
+)
+
+# Store a memory
+client.post("/v1/memories", json={
+    "content": "User prefers dark mode",
+    "memory_type": "profile",
+})
+
+# Retrieve relevant memories
+memories = client.post("/v1/memories/retrieve", json={
+    "query": "UI preferences",
+    "top_k": 5,
+}).json()
+
+# Batch store
+client.post("/v1/memories/batch", json={
+    "memories": [
+        {"content": "Project uses React 18"},
+        {"content": "Deployment target is AWS ECS"},
+    ]
+})
+
+# Correct a memory
+client.put("/v1/memories/MEMORY_ID/correct", json={
+    "new_content": "User prefers light mode now",
+    "reason": "User changed preference",
+})
+
+# Delete a memory
+client.delete("/v1/memories/MEMORY_ID")
+
+# Create a snapshot
+client.post("/v1/snapshots", json={
+    "name": "before-migration",
+    "description": "Snapshot before DB migration",
+})
+
+# Compare snapshot with current state
+diff = client.get("/v1/snapshots/before-migration/diff").json()
+```
+
+### JavaScript
+
+```javascript
+const API = "https://memoria-host:8100";
+const headers = {
+  "Authorization": "Bearer sk-your-key...",
+  "Content-Type": "application/json",
+};
+
+// Store
+await fetch(`${API}/v1/memories`, {
+  method: "POST", headers,
+  body: JSON.stringify({ content: "User prefers dark mode" }),
+});
+
+// Retrieve
+const res = await fetch(`${API}/v1/memories/retrieve`, {
+  method: "POST", headers,
+  body: JSON.stringify({ query: "UI preferences" }),
+});
+const memories = await res.json();
+```
+
+### cURL
+
+```bash
+# Store
+curl -X POST https://memoria-host:8100/v1/memories \
+  -H "Authorization: Bearer sk-your-key..." \
+  -H "Content-Type: application/json" \
+  -d '{"content": "User prefers Python", "memory_type": "profile"}'
+
+# Retrieve
+curl -X POST https://memoria-host:8100/v1/memories/retrieve \
+  -H "Authorization: Bearer sk-your-key..." \
+  -H "Content-Type: application/json" \
+  -d '{"query": "programming language"}'
+
+# List memories (cursor pagination)
+curl "https://memoria-host:8100/v1/memories?limit=20" \
+  -H "Authorization: Bearer sk-your-key..."
+
+# Profile
+curl https://memoria-host:8100/v1/profiles/me \
+  -H "Authorization: Bearer sk-your-key..."
+```
+
+---
+
+## Memory Types
+
+| Type | Use Case | Example |
+|------|----------|---------|
+| `semantic` | Facts, decisions, architecture choices (default) | "Project uses PostgreSQL 15" |
+| `profile` | User/agent preferences | "User prefers concise responses" |
+| `procedural` | How-to knowledge, workflows | "Deploy by running make deploy" |
+| `working` | Temporary context for current task | "Currently debugging auth module" |
+| `tool_result` | Results from tool executions | "Last test run: 94 passed" |
+
+---
+
+## Enterprise Integration
+
+Memoria is designed as a headless backend — your platform handles user identity, Memoria handles memory.
+
+### Integration Flow
+
+```
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐
+│  Your SSO   │────▶│  Your App    │────▶│  Memoria    │
+│  (LDAP/OIDC)│     │  Backend     │     │  API         │
+└─────────────┘     └──────────────┘     └──────────────┘
+                         │                      │
+                    1. User logs in         3. Store/retrieve
+                    2. Map to Memoria         memories
+                       user_id
+```
+
+### User Provisioning
+
+Your backend calls this once per new user:
+
+```python
+def provision_memoria_user(internal_user_id: str, display_name: str) -> str:
+    """Create Memoria user and return API key."""
+    resp = httpx.post(
+        f"{MEMORIA_URL}/auth/keys",
+        headers={"Authorization": f"Bearer {MASTER_KEY}"},
+        json={"user_id": internal_user_id, "name": display_name},
+    )
+    return resp.json()["raw_key"]  # Store this in your user DB
+```
+
+### Multi-Tenant Isolation
+
+Every API query is automatically scoped to the `user_id` derived from the API key. Users cannot access each other's memories. No additional configuration needed.
+
+### SaaS Platform Pattern
+
+```python
+# Your SaaS backend — proxy pattern
+@app.post("/api/memories")
+def store_memory(request, current_user):
+    memoria_key = get_memoria_key(current_user.id)
+    resp = httpx.post(
+        f"{MEMORIA_URL}/v1/memories",
+        headers={"Authorization": f"Bearer {memoria_key}"},
+        json=request.json(),
+    )
+    return resp.json()
+```
+
+Or give the API key directly to the client (e.g., for MCP configuration) if your threat model allows it.

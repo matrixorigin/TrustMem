@@ -1,0 +1,301 @@
+"""Memory CRUD + retrieval endpoints (SaaS version, no experiments)."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from memoria.api.database import get_db_factory, get_db_session
+from memoria.api.dependencies import get_current_user_id
+
+router = APIRouter(tags=["memory"])
+
+
+# ── Schemas ───────────────────────────────────────────────────────────
+
+class StoreRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+    memory_type: str = Field(default="semantic")
+    trust_tier: str | None = None
+    session_id: str | None = None
+    source: str = "api"
+
+
+class BatchStoreRequest(BaseModel):
+    memories: list[StoreRequest] = Field(..., min_length=1)
+
+
+class RetrieveRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    top_k: int = Field(default=10, ge=1, le=100)
+    memory_types: list[str] | None = None
+    session_id: str | None = None
+    include_cross_session: bool = True
+
+
+class CorrectRequest(BaseModel):
+    new_content: str = Field(..., min_length=1)
+    reason: str = ""
+
+
+class PurgeRequest(BaseModel):
+    memory_ids: list[str] | None = None
+    memory_types: list[str] | None = None
+    before: datetime | None = None
+    reason: str = ""
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    top_k: int = Field(default=10, ge=1, le=100)
+
+
+class ObserveRequest(BaseModel):
+    messages: list[dict[str, Any]] = Field(..., min_length=1)
+    source_event_ids: list[str] | None = None
+
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+def _to_response(mem: Any) -> dict[str, Any]:
+    return {
+        "memory_id": mem.memory_id,
+        "content": mem.content,
+        "memory_type": str(mem.memory_type) if mem.memory_type else "fact",
+        "trust_tier": str(mem.trust_tier) if hasattr(mem, "trust_tier") and mem.trust_tier else None,
+        "confidence": getattr(mem, "initial_confidence", None),
+        "observed_at": mem.observed_at.isoformat() if hasattr(mem, "observed_at") and mem.observed_at else None,
+    }
+
+
+def _get_editor(db_factory, user_id: str):
+    from memoria.core.memory.factory import create_editor
+    return create_editor(db_factory, user_id=user_id)
+
+
+def _verify_ownership(db_factory, memory_id: str, user_id: str):
+    """Verify memory belongs to user. Raises 404 if not found or not owned."""
+    from memoria.core.memory.models.memory import MemoryRecord as M
+    db = db_factory()
+    try:
+        row = db.query(M.user_id).filter_by(memory_id=memory_id).filter(M.is_active > 0).first()
+        if row is None or row.user_id != user_id:
+            raise HTTPException(status_code=404, detail="Memory not found")
+    finally:
+        db.close()
+
+
+def _get_service(db_factory, user_id: str):
+    from memoria.core.memory.factory import create_memory_service
+    return create_memory_service(db_factory, user_id=user_id)
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────
+
+@router.get("/memories")
+def list_memories(
+    memory_type: str | None = None,
+    limit: int = 100,
+    cursor: str | None = None,
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    """List active memories for the current user. Cursor-based pagination (pass last observed_at|memory_id)."""
+    from memoria.core.memory.models.memory import MemoryRecord as M
+    from sqlalchemy import or_, and_
+    db = db_factory()
+    try:
+        if limit > 500:
+            limit = 500
+        q = db.query(M.memory_id, M.content, M.memory_type, M.initial_confidence, M.observed_at).filter(
+            M.user_id == user_id, M.is_active > 0,
+        )
+        if memory_type:
+            q = q.filter(M.memory_type == memory_type)
+        if cursor:
+            parts = cursor.split("|", 1)
+            if len(parts) == 2:
+                q = q.filter(or_(
+                    M.observed_at < parts[0],
+                    and_(M.observed_at == parts[0], M.memory_id < parts[1]),
+                ))
+        rows = q.order_by(M.observed_at.desc(), M.memory_id.desc()).limit(limit).all()
+        _FMT = "%Y-%m-%d %H:%M:%S.%f"
+        items = [
+            {"memory_id": r.memory_id, "content": r.content, "memory_type": r.memory_type,
+             "confidence": r.initial_confidence,
+             "observed_at": r.observed_at.strftime(_FMT) if r.observed_at else None}
+            for r in rows
+        ]
+        next_cursor = None
+        if len(rows) == limit and rows:
+            last = rows[-1]
+            ts = last.observed_at.strftime(_FMT) if last.observed_at else ""
+            next_cursor = f"{ts}|{last.memory_id}"
+        return {"items": items, "next_cursor": next_cursor}
+    finally:
+        db.close()
+
+
+@router.post("/memories", status_code=status.HTTP_201_CREATED)
+def store_memory(
+    req: StoreRequest,
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    from memoria.core.memory.types import MemoryType, TrustTier
+    editor = _get_editor(db_factory, user_id)
+    try:
+        mem = editor.inject(
+            user_id, req.content,
+            memory_type=MemoryType(req.memory_type),
+            trust_tier=TrustTier(req.trust_tier) if req.trust_tier else None,
+            source=req.source, session_id=req.session_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return _to_response(mem)
+
+
+@router.post("/memories/batch", status_code=status.HTTP_201_CREATED)
+def batch_store(
+    req: BatchStoreRequest,
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    from memoria.core.memory.types import MemoryType
+    editor = _get_editor(db_factory, user_id)
+    specs = [
+        {"content": m.content, "memory_type": MemoryType(m.memory_type), "source": m.source}
+        for m in req.memories
+    ]
+    memories = editor.batch_inject(user_id, specs, source="api_batch")
+    return [_to_response(m) for m in memories]
+
+
+@router.post("/memories/retrieve")
+def retrieve_memories(
+    req: RetrieveRequest,
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    from memoria.core.memory.types import MemoryType
+    svc = _get_service(db_factory, user_id=user_id)
+    memory_types = [MemoryType(t) for t in req.memory_types] if req.memory_types else None
+    memories, _meta = svc.retrieve(
+        user_id, req.query, top_k=req.top_k, memory_types=memory_types,
+        session_id=req.session_id or "", include_cross_session=req.include_cross_session,
+    )
+    return [_to_response(m) for m in memories]
+
+
+@router.post("/memories/search")
+def search_memories(
+    req: SearchRequest,
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    svc = _get_service(db_factory, user_id=user_id)
+    memories, _meta = svc.retrieve(user_id, req.query, top_k=req.top_k)
+    return [_to_response(m) for m in memories]
+
+
+@router.put("/memories/{memory_id}/correct")
+def correct_memory(
+    memory_id: str,
+    req: CorrectRequest,
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    _verify_ownership(db_factory, memory_id, user_id)
+    editor = _get_editor(db_factory, user_id)
+    try:
+        mem = editor.correct(user_id, memory_id, req.new_content, reason=req.reason)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return _to_response(mem)
+
+
+@router.delete("/memories/{memory_id}")
+def delete_memory(
+    memory_id: str,
+    reason: str = "",
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    _verify_ownership(db_factory, memory_id, user_id)
+    editor = _get_editor(db_factory, user_id)
+    result = editor.purge(user_id, memory_ids=[memory_id], reason=reason)
+    return {"purged": result.deactivated}
+
+
+@router.post("/memories/purge")
+def purge_memories(
+    req: PurgeRequest,
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    from memoria.core.memory.types import MemoryType
+    editor = _get_editor(db_factory, user_id)
+    memory_types = [MemoryType(t) for t in req.memory_types] if req.memory_types else None
+    result = editor.purge(
+        user_id, memory_ids=req.memory_ids, memory_types=memory_types,
+        before=req.before, reason=req.reason,
+    )
+    return {"purged": result.deactivated}
+
+
+@router.get("/profiles/{target_user_id}")
+def get_profile(
+    target_user_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    # "me" resolves to the authenticated user
+    resolved = user_id if target_user_id == "me" else target_user_id
+    svc = _get_service(db_factory, user_id=resolved)
+    profile = svc.get_profile(resolved)
+
+    # Enrich with stats for quality assessment
+    from sqlalchemy import func as sa_func
+    from memoria.core.memory.models.memory import MemoryRecord as M
+    db = db_factory()
+    try:
+        stats: dict[str, Any] = {}
+        rows = db.query(M.memory_type, sa_func.count()).filter(
+            M.user_id == resolved, M.is_active > 0,
+        ).group_by(M.memory_type).all()
+        stats["by_type"] = {str(r[0]): r[1] for r in rows}
+        stats["total"] = sum(r[1] for r in rows)
+        stats["avg_confidence"] = db.query(
+            sa_func.round(sa_func.avg(M.initial_confidence), 2)
+        ).filter(M.user_id == resolved, M.is_active > 0).scalar()
+        stats["oldest"] = db.query(sa_func.min(M.observed_at)).filter(
+            M.user_id == resolved, M.is_active > 0,
+        ).scalar()
+        stats["newest"] = db.query(sa_func.max(M.observed_at)).filter(
+            M.user_id == resolved, M.is_active > 0,
+        ).scalar()
+        if stats["oldest"]:
+            stats["oldest"] = stats["oldest"].isoformat()
+        if stats["newest"]:
+            stats["newest"] = stats["newest"].isoformat()
+    finally:
+        db.close()
+
+    return {"user_id": resolved, "profile": profile, "stats": stats}
+
+
+@router.post("/observe")
+def observe_turn(
+    req: ObserveRequest,
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    svc = _get_service(db_factory, user_id=user_id)
+    memories = svc.observe_turn(user_id, req.messages, source_event_ids=req.source_event_ids)
+    return [_to_response(m) for m in memories]
