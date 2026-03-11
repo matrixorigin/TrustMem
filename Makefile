@@ -1,6 +1,6 @@
 .PHONY: help start stop logs status build test test-docker test-mcp test-all test-all-cov clean reset \
         cloud-start cloud-stop cloud-logs cloud-status cloud-clean cloud-rebuild \
-        install dev build-wheel publish publish-test
+        install dev build-wheel publish publish-test bump-version
 
 help:
 	@echo "Memoria — Multi-tenant memory service"
@@ -22,6 +22,7 @@ help:
 	@echo "Development:"
 	@echo "  make install            Install dependencies (editable)"
 	@echo "  make dev                Start API locally (no Docker, needs DB)"
+	@echo "  make bump-version BUMP=patch  - Bump version (patch/minor/major)"
 	@echo ""
 	@echo "Tests:"
 	@echo "  make test               Run API e2e tests (TestClient, needs DB)"
@@ -152,3 +153,9 @@ clean:
 	@find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 	@find . -name "*.pyc" -delete 2>/dev/null || true
 	@echo "Cleaned"
+
+# ── Version Management ──────────────────────────────────────────────
+
+.PHONY: bump-version
+bump-version:
+	@python scripts/bump_version.py $(BUMP)
