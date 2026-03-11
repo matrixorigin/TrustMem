@@ -371,12 +371,16 @@ class EmbeddedBackend(MemoryBackend):
         store = GraphStore(self._db_factory)
         semantic_nodes = store.get_user_nodes(user_id, node_type=NodeType.SEMANTIC, active_only=True, load_embedding=False)
         if not semantic_nodes:
-            return {"memories": []}
+            return {"memories": [], "existing_entities": []}
         node_ids = {n.node_id for n in semantic_nodes}
         existing_edges = store.get_edges_for_nodes(node_ids)
         linked_ids = {nid for nid, edges in existing_edges.items() if any(e.edge_type == EdgeType.ENTITY_LINK.value for e in edges)}
         unlinked = [n for n in semantic_nodes if n.node_id not in linked_ids]
-        return {"memories": [{"memory_id": n.memory_id or n.node_id, "content": n.content} for n in unlinked[:50]]}
+        entity_nodes = store.get_user_nodes(user_id, node_type=NodeType.ENTITY, active_only=True, load_embedding=False)
+        return {
+            "memories": [{"memory_id": n.memory_id or n.node_id, "content": n.content} for n in unlinked[:50]],
+            "existing_entities": [{"name": n.content, "entity_type": n.entity_type} for n in entity_nodes],
+        }
 
     def link_entities(self, user_id: str, entities: list[dict]) -> dict:
         """Write entity nodes + edges from user-LLM extraction results.
@@ -1210,6 +1214,10 @@ def create_server(backend: MemoryBackend, default_user: str = "default") -> Fast
         from memoria.core.llm import get_llm_client
         return get_llm_client() is not None
 
+    def _json_dumps(obj: dict) -> str:
+        import json
+        return json.dumps(obj, ensure_ascii=False)
+
     @server.tool()
     def memory_store(
         content: str,
@@ -1444,8 +1452,11 @@ def create_server(backend: MemoryBackend, default_user: str = "default") -> Fast
     ) -> str:
         """Extract named entities from memories and build entity graph.
 
-        Only call when user explicitly asks to "extract entities", "build entity graph",
-        or "link entities". Processes only unlinked memories (idempotent).
+        Call proactively when:
+        - You stored ≥5 memories this session and haven't extracted yet
+        - User mentions a project/technology/person not seen in previous retrieve results
+        - User asks about relationships between concepts
+        Do NOT call if conversation is short (<3 turns) with no new named entities.
 
         Lightweight regex extraction runs automatically on every memory store.
         This tool adds deeper extraction via LLM.
@@ -1461,22 +1472,25 @@ def create_server(backend: MemoryBackend, default_user: str = "default") -> Fast
         if mode == "candidates" or (mode == "auto" and not _has_internal_llm()):
             result = backend.get_entity_candidates(uid)
             memories = result.get("memories", [])
+            existing = result.get("existing_entities", [])
             if not memories:
-                return "No unlinked memories found — all memories already have entity links."
-            lines = [f"- [{m['memory_id']}] {m['content']}" for m in memories]
-            return (
-                f"Found {len(memories)} memories without entity links. "
-                "Extract named entities (people, tech, projects, repos) from each, "
-                "then call memory_link_entities with the results.\n\n"
-                + "\n".join(lines)
-            )
+                return _json_dumps({"status": "complete", "unlinked": 0, "message": "All memories already have entity links."})
+            return _json_dumps({
+                "status": "candidates",
+                "unlinked": len(memories),
+                "memories": memories,
+                "existing_entities": existing,
+                "instruction": "Extract named entities (people, tech, projects, repos) from each memory, then call memory_link_entities.",
+            })
         result = backend.extract_entities(uid)
         if "error" in result:
-            return f"Entity extraction failed: {result['error']}"
-        return (
-            f"Entity extraction done: {result['total_memories']} memories processed, "
-            f"{result['entities_found']} entities found, {result['edges_created']} edges created."
-        )
+            return _json_dumps({"status": "error", "error": result["error"]})
+        return _json_dumps({
+            "status": "done",
+            "total_memories": result["total_memories"],
+            "entities_found": result["entities_found"],
+            "edges_created": result["edges_created"],
+        })
 
     @server.tool()
     def memory_link_entities(
@@ -1496,14 +1510,19 @@ def create_server(backend: MemoryBackend, default_user: str = "default") -> Fast
         try:
             parsed = _json.loads(entities)
         except (ValueError, TypeError):
-            return "Invalid JSON. Expected: [{\"memory_id\": \"...\", \"entities\": [{\"name\": \"...\", \"type\": \"...\"}]}]"
+            return _json_dumps({"status": "error", "error": "Invalid JSON", "expected_format": [{"memory_id": "...", "entities": [{"name": "...", "type": "..."}]}]})
         if not isinstance(parsed, list) or not all(isinstance(x, dict) and "memory_id" in x for x in parsed):
-            return "Invalid format. Expected: [{\"memory_id\": \"...\", \"entities\": [{\"name\": \"...\", \"type\": \"...\"}]}]"
+            return _json_dumps({"status": "error", "error": "Invalid format", "expected_format": [{"memory_id": "...", "entities": [{"name": "...", "type": "..."}]}]})
         try:
             result = backend.link_entities(_user(user_id), parsed)
         except Exception as e:
-            return f"Entity linking failed: {e}"
-        return f"Linked: {result['entities_created']} new entities, {result['edges_created']} edges created."
+            return _json_dumps({"status": "error", "error": str(e)})
+        return _json_dumps({
+            "status": "done",
+            "entities_created": result["entities_created"],
+            "entities_reused": result.get("entities_reused", 0),
+            "edges_created": result["edges_created"],
+        })
 
     @server.tool()
     def memory_rebuild_index(
