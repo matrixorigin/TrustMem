@@ -11,6 +11,7 @@ Governance cycles:
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -597,7 +598,13 @@ class GovernanceScheduler(DbConsumer):
                     continue
                 ids = [r.memory_id for r in group]
                 timestamps = [r.observed_at for r in group]
-                embs = np.array([r.embedding for r in group], dtype=np.float32)
+                raw = [
+                    json.loads(r.embedding)
+                    if isinstance(r.embedding, str)
+                    else r.embedding
+                    for r in group
+                ]
+                embs = np.array(raw, dtype=np.float32)
 
                 # Group is ordered by observed_at DESC: i is newer than j when i < j
                 for i in range(len(group)):

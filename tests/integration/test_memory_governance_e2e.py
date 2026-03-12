@@ -200,6 +200,103 @@ class TestTrustTierAffectsQuarantine:
         assert store.get(t4.memory_id).is_active is False
 
 
+class TestCompressRedundant:
+    """_compress_redundant deactivates near-duplicate memories."""
+
+    def test_near_duplicates_compressed(self, db_factory, cleanup):
+        from sqlalchemy import text
+        import json
+
+        uid = _uid()
+        mid_old = str(uuid7())
+        mid_new = str(uuid7())
+        cleanup.extend([mid_old, mid_new])
+
+        # Two memories with identical embeddings (dim=384)
+        emb = [0.5] * 384
+        emb_str = json.dumps(emb)
+        now = datetime.now(timezone.utc)
+        old_time = now - timedelta(days=1)
+
+        db = db_factory()
+        for mid, ts in [(mid_old, old_time), (mid_new, now)]:
+            db.execute(
+                text(
+                    "INSERT INTO mem_memories "
+                    "(memory_id, user_id, content, memory_type, trust_tier, "
+                    "initial_confidence, is_active, embedding, source_event_ids, "
+                    "observed_at, created_at) "
+                    "VALUES (:mid, :uid, 'duplicate content', 'semantic', 'T3', "
+                    "0.8, 1, :emb, '[]', :ts, :ts)"
+                ),
+                {"mid": mid, "uid": uid, "emb": emb_str, "ts": ts},
+            )
+        db.commit()
+        db.close()
+
+        config = MemoryGovernanceConfig(
+            redundant_similarity_threshold=0.95,
+            redundant_window_days=30,
+        )
+        scheduler = GovernanceScheduler(db_factory, config=config)
+        result = scheduler.run_daily(uid)
+
+        assert result.compressed_redundant >= 1
+        assert result.errors == [], f"Unexpected errors: {result.errors}"
+
+        store = MemoryStore(db_factory)
+        assert store.get(mid_new).is_active is True, "Newer memory must survive"
+        assert store.get(mid_old).is_active is False, (
+            "Older duplicate must be deactivated"
+        )
+
+    def test_different_embeddings_not_compressed(self, db_factory, cleanup):
+        from sqlalchemy import text
+        import json
+
+        uid = _uid()
+        mid1 = str(uuid7())
+        mid2 = str(uuid7())
+        cleanup.extend([mid1, mid2])
+
+        # Two memories with very different embeddings
+        emb1 = [1.0] + [0.0] * 383
+        emb2 = [0.0] * 383 + [1.0]
+        now = datetime.now(timezone.utc)
+
+        db = db_factory()
+        for mid, emb, offset in [(mid1, emb1, 1), (mid2, emb2, 0)]:
+            db.execute(
+                text(
+                    "INSERT INTO mem_memories "
+                    "(memory_id, user_id, content, memory_type, trust_tier, "
+                    "initial_confidence, is_active, embedding, source_event_ids, "
+                    "observed_at, created_at) "
+                    "VALUES (:mid, :uid, 'unique content', 'semantic', 'T3', "
+                    "0.8, 1, :emb, '[]', :ts, :ts)"
+                ),
+                {
+                    "mid": mid,
+                    "uid": uid,
+                    "emb": json.dumps(emb),
+                    "ts": now - timedelta(days=offset),
+                },
+            )
+        db.commit()
+        db.close()
+
+        config = MemoryGovernanceConfig(redundant_similarity_threshold=0.95)
+        scheduler = GovernanceScheduler(db_factory, config=config)
+        result = scheduler.run_daily(uid)
+
+        assert result.compressed_redundant == 0
+        assert result.errors == [], f"Unexpected errors: {result.errors}"
+
+        store = MemoryStore(db_factory)
+        assert store.get(mid1).is_active is True
+        assert store.get(mid2).is_active is True
+
+
 class TestFullCycle:
     def test_all_frequencies(self, db_factory, cleanup):
         """Full governance cycle runs all frequencies without error."""

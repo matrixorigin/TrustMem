@@ -76,7 +76,7 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev,openai-embedding]"
 
-      - name: Run e2e tests
+      - name: Run all tests
         env:
           MEMORIA_MASTER_KEY: ci-master-key-memoria-test
           MEMORIA_EMBEDDING_PROVIDER: openai
@@ -85,16 +85,6 @@ jobs:
           MEMORIA_EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
           MEMORIA_EMBEDDING_BASE_URL: ${{ vars.EMBEDDING_BASE_URL || '' }}
         run: make test
-
-      - name: Run MCP tests
-        env:
-          MEMORIA_MASTER_KEY: ci-master-key-memoria-test
-          MEMORIA_EMBEDDING_PROVIDER: openai
-          MEMORIA_EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL || 'BAAI/bge-m3' }}
-          MEMORIA_EMBEDDING_DIM: ${{ vars.EMBEDDING_DIM || '1024' }}
-          MEMORIA_EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
-          MEMORIA_EMBEDDING_BASE_URL: ${{ vars.EMBEDDING_BASE_URL || '' }}
-        run: make test-mcp
 
   # ── Job 3: Docker regression tests ───────────────────────────────────
   docker:

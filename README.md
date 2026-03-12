@@ -120,7 +120,7 @@ You:     key is sk-xxxx, model BAAI/bge-m3
 
 Cursor:  Database is ready. Installing Memoria now:
 
-           pip install "memoria[openai-embedding]"
+           pip install mo-memoria
 
 You:     [output] Successfully installed memoria-0.1.0
 
@@ -192,12 +192,10 @@ See [docker-compose.yml](docker-compose.yml) for configuration options. Don't wa
 ### 2. Install Memoria
 
 ```bash
-# Remote mode (connecting to a managed/team server) — no extras needed:
-pip install memoria
+pip install mo-memoria
 
-# Embedded mode (running your own DB) — also install an embedding provider:
-pip install "memoria[openai-embedding]"   # OpenAI / SiliconFlow / any OpenAI-compatible endpoint
-pip install "memoria[local-embedding]"    # Local sentence-transformers (~900MB download)
+# Only needed if using local embedding model (no external API):
+pip install "mo-memoria[local-embedding]"    # Local sentence-transformers (~900MB download)
 ```
 
 **⚠️ Configure embedding BEFORE the MCP server starts for the first time.** Tables are created on first startup with the configured embedding dimension. Changing it later requires re-creating the embedding column.
@@ -290,7 +288,7 @@ memoria init --api-url "https://new-server:8100" --token "sk-new-key..."
 
 **Update steering rules only** (after upgrading Memoria):
 ```bash
-pip install --upgrade memoria
+pip install --upgrade mo-memoria
 memoria update-rules
 # restart your AI tool
 ```
@@ -578,7 +576,7 @@ docker start matrixone
 ### "sentence-transformers not installed"
 
 ```bash
-pip install "memoria[local-embedding]"
+pip install "mo-memoria[local-embedding]"
 ```
 
 ### First query is slow
@@ -598,7 +596,7 @@ docker start matrixone
 ### "sentence-transformers not installed"
 
 ```bash
-pip install "memoria[local-embedding]"
+pip install "mo-memoria[local-embedding]"
 ```
 
 ### First query is slow
@@ -638,9 +636,8 @@ memoria init --db-url "mysql+pymysql://root:111@localhost:6001/memoria"
 
 ```bash
 make test-unit          # Unit tests (no DB)
-make test               # E2E tests (needs DB)
+make test               # All tests (needs DB)
 make test-mcp           # MCP server tests
-make test-all           # All tests
 make test-all-cov       # All tests with coverage
 ```
 
@@ -672,7 +669,7 @@ If you're an AI agent helping a user set up Memoria, **ask before acting**:
 1. **Which AI tool?** Kiro / Cursor / Claude Desktop?
 2. **MatrixOne database?** Already have one → get URL. Local Docker → `docker compose up -d`. [MatrixOne Cloud](https://cloud.matrixorigin.cn) → no Docker needed.
 3. **Embedding?** ⚠️ **Ask BEFORE installation.** Once the MCP server starts, the embedding dimension is locked into the database schema. Already have a service (OpenAI/SiliconFlow/Ollama)? Use it. Otherwise local is fine.
-4. **Install**: `pip install memoria` (add `[openai-embedding]` or `[local-embedding]` as needed)
+4. **Install**: `pip install mo-memoria` (add `[local-embedding]` if no external embedding service)
 5. **Configure**: Run `memoria init` in the user's project directory (see [Quick Start](#quick-start) for flags). It auto-detects the tool and writes MCP config + steering rules.
 6. Tell user to **restart their AI tool**
 7. **Verify**: Ask the AI tool to call `memory_retrieve("test")` — should return "No relevant memories found"

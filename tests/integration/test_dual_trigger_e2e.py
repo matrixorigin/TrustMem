@@ -6,7 +6,6 @@ Tests with REAL database:
 3. BM25 catches exact terms that vector may miss
 """
 
-import os
 from uuid import uuid4
 
 import pytest
@@ -15,7 +14,7 @@ from sqlalchemy import text
 from memoria.core.memory.graph.graph_store import GraphStore, _new_id
 from memoria.core.memory.graph.types import GraphNodeData, NodeType
 
-EMBEDDING_DIM = int(os.environ.get("MEMORIA_EMBEDDING_DIM", "384"))
+EMBEDDING_DIM = 384  # fixed for integration tests
 
 
 def _uid() -> str:

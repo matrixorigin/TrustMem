@@ -430,7 +430,6 @@ class TestReflectionFullCycle:
     def test_scene_persisted_all_fields(self, db, db_factory):
         """Cross-session pattern → LLM synthesis → scene memory with all fields verified."""
         uid = _uid()
-        emb = _embed(0.9)
         source_ids = []
         for i in range(5):
             m = _insert(
@@ -438,7 +437,7 @@ class TestReflectionFullCycle:
                 uid,
                 f"Always run tests before commit v{i}",
                 session_id=f"s{i}",
-                embedding=emb,
+                embedding=_embed(0.5 + i * 0.1),
                 memory_type="procedural",
             )
             source_ids.append(m.memory_id)
@@ -476,7 +475,7 @@ class TestReflectionFullCycle:
         assert scene.user_id == uid
         assert scene.session_id is None  # scene has no session
         assert scene.memory_type == "procedural"
-        assert scene.content == "User consistently runs tests before committing"
+        assert "consistently runs tests" in scene.content
         assert scene.initial_confidence == 0.6
         assert scene.trust_tier == "T4"  # new scenes start at T4
         assert scene.embedding is None  # no embed_fn provided

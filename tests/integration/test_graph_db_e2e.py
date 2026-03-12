@@ -10,7 +10,6 @@ Tests:
 7. Skeleton load: column-query without embedding
 """
 
-import os
 from uuid import uuid4
 
 import pytest
@@ -18,7 +17,7 @@ import pytest
 from memoria.core.memory.graph.graph_store import GraphStore
 from memoria.core.memory.graph.types import EdgeType, GraphNodeData, NodeType
 
-EMBEDDING_DIM = int(os.environ.get("MEMORIA_EMBEDDING_DIM", "384"))
+EMBEDDING_DIM = 384  # fixed for integration tests
 
 
 def _uid() -> str:
@@ -1204,10 +1203,11 @@ class TestEntityLinking:
         """link_entities_batch returns correct reused count for existing entities."""
         from memoria.core.memory.graph.types import GraphNodeData, NodeType
 
-        # Pre-create an entity node
+        # Pre-create entity in mem_entities + graph node with matching entity_id
+        eid = store.upsert_entity(user_id, "redis", "redis", "tech")
         store.create_node(
             GraphNodeData(
-                node_id=uuid4().hex,
+                node_id=eid,
                 user_id=user_id,
                 node_type=NodeType.ENTITY,
                 content="redis",

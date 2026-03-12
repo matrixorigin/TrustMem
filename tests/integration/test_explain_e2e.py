@@ -1,7 +1,6 @@
 """End-to-end EXPLAIN ANALYZE test — verifies explain flows through entire call chain."""
 
 import json
-import os
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -16,7 +15,7 @@ from memoria.core.tiered_loader import TieredMemoryLoader
 from memoria.core.memory.tabular.service import MemoryService
 from memoria.core.memory.types import Memory, MemoryType
 
-EMBEDDING_DIM = int(os.environ.get("MEMORIA_EMBEDDING_DIM", "384"))
+EMBEDDING_DIM = 384  # fixed for integration tests
 
 
 def _uid():

@@ -93,9 +93,9 @@ source .venv/bin/activate
 ```bash
 # Step 5: Install Memoria (run alone)
 # If using local embedding:
-pip install 'memoria[local-embedding]'
+pip install 'mo-memoria[local-embedding]'
 # If using an existing embedding service (no 900MB download):
-pip install memoria
+pip install mo-memoria
 ```
 ```bash
 # Step 6: Configure (in user's project directory)
@@ -125,9 +125,9 @@ source .venv/bin/activate
 ```
 ```bash
 # 4. Install
-pip install 'memoria[local-embedding]'
+pip install 'mo-memoria[local-embedding]'
 # or, if using an existing embedding service:
-# pip install memoria
+# pip install mo-memoria
 ```
 ```bash
 # 5. Configure with cloud URL
@@ -147,9 +147,9 @@ source .venv/bin/activate
 ```
 ```bash
 # 2. Install
-pip install 'memoria[local-embedding]'
+pip install 'mo-memoria[local-embedding]'
 # or, if using an existing embedding service:
-# pip install memoria
+# pip install mo-memoria
 ```
 ```bash
 # 3. Configure with existing DB
@@ -171,7 +171,7 @@ source .venv/bin/activate
 ```
 ```bash
 # 2. Install (no embedding extras needed — server handles embedding)
-pip install memoria
+pip install mo-memoria
 ```
 ```bash
 # 3. Configure with remote server

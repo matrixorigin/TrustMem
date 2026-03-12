@@ -1,17 +1,28 @@
-"""Integration test fixtures — uses Memoria's own database."""
+"""Integration test fixtures — uses Memoria's own database.
+
+Under xdist (-n auto), each worker gets its own isolated DB
+(memoria_test_w0, memoria_test_w1, …) that is dropped after the session.
+Without xdist, uses memoria_test.
+"""
 
 import os
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
-# Default to memoria_test DB, override via env
-os.environ.setdefault("MEMORIA_DB_HOST", "localhost")
-os.environ.setdefault("MEMORIA_DB_PORT", "6001")
-os.environ.setdefault("MEMORIA_DB_NAME", "memoria_test")
-
 _engine = None
 _SessionLocal = None
+_worker_db_name: str | None = None
+
+
+def _db_name() -> str:
+    global _worker_db_name
+    if _worker_db_name is not None:
+        return _worker_db_name
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "")  # e.g. "gw0", "gw1"
+    base = os.environ.get("MEMORIA_DB_NAME", "memoria_test")
+    _worker_db_name = f"{base}_{worker}" if worker else base
+    return _worker_db_name
 
 
 def _get_engine():
@@ -20,11 +31,11 @@ def _get_engine():
         return _engine
     from matrixone import Client as MoClient
 
-    host = os.environ["MEMORIA_DB_HOST"]
-    port = int(os.environ["MEMORIA_DB_PORT"])
+    host = os.environ.get("MEMORIA_DB_HOST", "localhost")
+    port = int(os.environ.get("MEMORIA_DB_PORT", "6001"))
     user = os.environ.get("MEMORIA_DB_USER", "root")
     password = os.environ.get("MEMORIA_DB_PASSWORD", "111")
-    db_name = os.environ["MEMORIA_DB_NAME"]
+    db_name = _db_name()
 
     bootstrap = MoClient(
         host=host,
@@ -59,29 +70,47 @@ def _get_session_local():
 
 
 def _init_tables():
-    """Create all tables with correct embedding dim."""
     engine = _get_engine()
     from memoria.schema import ensure_tables
-
-    dim = int(os.environ.get("MEMORIA_EMBEDDING_DIM", "384"))
-    ensure_tables(engine, dim=dim, force=True)
-
-    # Also create graph tables if not exist
     from memoria.core.base import Base
 
+    ensure_tables(engine, dim=384, force=True)
     Base.metadata.create_all(bind=engine, checkfirst=True)
 
 
-# Run once per session
-_tables_initialized = False
+def _drop_worker_db():
+    """Drop the per-worker DB after the session (xdist only)."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "")
+    if not worker:
+        return  # don't drop the shared DB in non-parallel runs
+    db_name = _db_name()
+    from matrixone import Client as MoClient
+
+    host = os.environ.get("MEMORIA_DB_HOST", "localhost")
+    port = int(os.environ.get("MEMORIA_DB_PORT", "6001"))
+    user = os.environ.get("MEMORIA_DB_USER", "root")
+    password = os.environ.get("MEMORIA_DB_PASSWORD", "111")
+    try:
+        client = MoClient(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database="mo_catalog",
+            sql_log_mode="off",
+        )
+        with client._engine.connect() as c:
+            c.execute(text(f"DROP DATABASE IF EXISTS `{db_name}`"))
+            c.execute(text("COMMIT"))
+        client._engine.dispose()
+    except Exception as e:
+        print(f"Warning: failed to drop worker DB {db_name}: {e}")
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _init_db():
-    global _tables_initialized
-    if not _tables_initialized:
-        _init_tables()
-        _tables_initialized = True
+def _init_db(request):
+    _init_tables()
+    request.addfinalizer(_drop_worker_db)
 
 
 @pytest.fixture(scope="session")
@@ -95,3 +124,13 @@ def db(db_factory):
     yield session
     session.rollback()
     session.close()
+
+
+@pytest.fixture(scope="session")
+def embed_client():
+    """Mock embedding client — no sentence_transformers required."""
+    from memoria.core.embedding import EmbeddingClient, set_embedding_client
+
+    client = EmbeddingClient(provider="mock", model="mock", dim=384)
+    set_embedding_client(client)
+    return client

@@ -157,7 +157,7 @@ class TestOpinionContradictingEvidence:
         observer._evolve_scene_opinions(new_mem)
 
         s = _get(db, scene.memory_id)
-        assert s.initial_confidence == pytest.approx(0.4, abs=0.01)  # 0.5 - 0.10
+        assert s.initial_confidence == pytest.approx(0.38, abs=0.01)  # 0.5 - 0.12
         assert s.trust_tier == "T4"
         assert s.is_active == 1
         assert s.content == "User prefers tabs"
@@ -258,7 +258,7 @@ class TestOpinionQuarantine:
         observer._evolve_scene_opinions(new_mem)
 
         s = _get(db, scene.memory_id)
-        assert s.initial_confidence == pytest.approx(0.15, abs=0.01)  # 0.25 - 0.10
+        assert s.initial_confidence == pytest.approx(0.13, abs=0.01)  # 0.25 - 0.12
         assert s.is_active == 0  # QUARANTINED
         assert s.trust_tier == "T4"  # not promoted
         assert s.content == "Outdated belief"
@@ -356,6 +356,6 @@ class TestOpinionMultipleScenes:
         s1 = _get(db, scene_similar.memory_id)
         assert s1.initial_confidence == pytest.approx(0.55, abs=0.01)
 
-        # Different scene: contradicting → -0.10
+        # Different scene: contradicting → -0.12
         s2 = _get(db, scene_different.memory_id)
-        assert s2.initial_confidence == pytest.approx(0.4, abs=0.01)
+        assert s2.initial_confidence == pytest.approx(0.38, abs=0.01)

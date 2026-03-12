@@ -32,7 +32,7 @@ import pytest_asyncio
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-pytestmark = [pytest.mark.slow]  # e2e tests spawn subprocess per test
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("mcp_stdio")]
 
 # ── Config ────────────────────────────────────────────────────────────
 
@@ -133,7 +133,7 @@ async def _mcp_session(user: str) -> AsyncGenerator[ClientSession, None]:
     """Spawn a real MCP server subprocess and return a connected ClientSession."""
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "mo_memory_mcp", "--db-url", DB_URL, "--user", user],
+        args=["-m", "memoria.mcp_local.server", "--db-url", DB_URL, "--user", user],
         env=_server_env(),
     )
     async with stdio_client(params) as (r, w):
@@ -162,7 +162,7 @@ async def session():
     # so we manage the lifecycle manually.
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "mo_memory_mcp", "--db-url", DB_URL, "--user", user],
+        args=["-m", "memoria.mcp_local.server", "--db-url", DB_URL, "--user", user],
         env=_server_env(),
     )
 
@@ -258,13 +258,15 @@ async def test_store_with_session_id(session):
 
 @pytest.mark.asyncio
 async def test_retrieve_returns_stored(session):
-    user = _user("main")
+    user = _user("retrieve")  # isolated user
     keyword = f"kw_{uuid.uuid4().hex[:6]}"
     await _call(
         session, "memory_store", content=f"memory about {keyword}", user_id=user
     )
 
-    result = await _call(session, "memory_retrieve", query=keyword, user_id=user)
+    result = await _call(
+        session, "memory_retrieve", query=keyword, user_id=user, top_k=50
+    )
     assert keyword in result
 
 
@@ -345,11 +347,11 @@ async def test_purge_by_topic(session):
 
 @pytest.mark.asyncio
 async def test_search(session):
-    user = _user("main")
+    user = _user("search")  # isolated user to avoid cross-test interference
     kw = f"searchkw_{uuid.uuid4().hex[:6]}"
     await _call(session, "memory_store", content=f"document about {kw}", user_id=user)
 
-    result = await _call(session, "memory_search", query=kw, user_id=user)
+    result = await _call(session, "memory_search", query=kw, user_id=user, top_k=50)
     assert kw in result
 
 

@@ -1,4 +1,4 @@
-.PHONY: help start stop logs status build test test-docker test-mcp test-all test-all-cov clean reset \
+.PHONY: help start stop logs status build test test-docker test-mcp test-all-cov clean reset \
         cloud-start cloud-stop cloud-logs cloud-status cloud-health cloud-clean cloud-rebuild \
         install dev build-wheel publish publish-test bump-version check lint type-check \
         new-key list-keys revoke-keys
@@ -36,10 +36,11 @@ help:
 	@echo "Tests:"
 	@echo "  make test               Run API e2e tests (TestClient, needs DB)"
 	@echo "  make test-unit          Run unit tests (14 tests)"
-	@echo "  make test-integration   Run integration tests (9 tests, needs DB)"
+	@echo "  make test               Run all tests (unit + e2e + mcp + integration, needs DB)"
+	@echo "  make test-unit          Run unit tests (no DB needed)"
+	@echo "  make test-integration   Run integration tests (needs DB)"
 	@echo "  make test-docker        Run Docker integration tests (needs: make start)"
 	@echo "  make test-mcp           Run MCP server tests"
-	@echo "  make test-all           Run all tests"
 	@echo "  make test-all-cov       Run all tests with coverage report"
 	@echo ""
 	@echo "Build & Publish:"
@@ -211,13 +212,14 @@ dev:
 # ── Tests ───────────────────────────────────────────────────────────
 
 test:
-	@python -m pytest memoria/tests/test_e2e.py -v
+	@python -m pytest tests/unit/ memoria/tests/test_e2e.py memoria/tests/test_mcp.py tests/integration/ -v -n auto --dist=loadgroup
+	@echo "For Docker tests: make start && make test-docker"
 
 test-unit:
 	@python -m pytest tests/unit/ -v -n auto
 
 test-integration:
-	@python -m pytest tests/integration/ -v
+	@python -m pytest tests/integration/ -v -n auto --dist=loadgroup
 
 test-docker:
 	@echo "Requires: make start"
@@ -225,9 +227,6 @@ test-docker:
 
 test-mcp:
 	@python -m pytest memoria/tests/test_mcp.py -v
-
-test-all: test-unit test test-mcp
-	@echo "For Docker tests: make start && make test-docker"
 
 test-all-cov:
 	@echo "Running all tests with coverage..."

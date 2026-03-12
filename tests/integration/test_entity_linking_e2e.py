@@ -14,7 +14,6 @@ Covers:
 8. Normalization: Chinese entities stored correctly
 """
 
-import os
 from uuid import uuid4
 
 import pytest
@@ -25,7 +24,7 @@ from memoria.core.memory.graph.graph_store import GraphStore, _new_id
 from memoria.core.memory.graph.types import GraphNodeData, NodeType
 from memoria.core.memory.types import Memory, MemoryType, TrustTier
 
-EMBEDDING_DIM = int(os.environ.get("MEMORIA_EMBEDDING_DIM", "384"))
+EMBEDDING_DIM = 384  # fixed for integration tests
 
 
 def _uid() -> str:

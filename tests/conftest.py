@@ -56,7 +56,7 @@ def db_engine():
     # Create tables
     from memoria.schema import ensure_tables
 
-    ensure_tables(engine, dim=384)
+    ensure_tables(engine, dim=384, force=True)
 
     yield engine
     engine.dispose()
