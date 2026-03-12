@@ -24,13 +24,13 @@ dependencies = [
     "mcp>=1.26.0,<2.0.0",
     "cryptography>=41.0.0",
     "uuid-utils>=0.10.0",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
 openai-embedding = ["openai>=1.0.0,<2.0.0"]
 local-embedding = [
     "sentence-transformers>=2.2.0",
-    "numpy>=1.24.0",
 ]
 llm = ["openai>=1.0.0,<2.0.0"]
 dev = [

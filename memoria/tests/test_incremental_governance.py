@@ -202,14 +202,15 @@ class TestIncrementalGovernance:
         assert params["task"] == "daily_user:bob"
         db.commit.assert_called_once()
 
-    def test_long_user_id_in_task_name(self):
-        """task_name uses user_id directly."""
+    def test_long_user_id_hashed_in_task_name(self):
+        """Long user_id is hashed to keep task_name bounded."""
         sched = self._make_scheduler()
         db = MagicMock()
         long_uid = "u" * 500
         sched._mark_daily_user(db, long_uid)
         params = db.execute.call_args[0][1]
-        assert params["task"] == f"daily_user:{long_uid}"
+        assert params["task"] == sched._daily_marker_key(long_uid)
+        assert len(params["task"]) <= 64  # prefix(11) + sha256[:16] = 27
 
     def test_marker_not_written_on_errors(self):
         """If _run_daily_for_user returns errors, marker should NOT be written."""

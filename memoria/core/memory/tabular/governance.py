@@ -324,12 +324,13 @@ class GovernanceScheduler(DbConsumer):
     def _has_changes_since_last_governance(self, db: Any, user_id: str) -> bool:
         """Check if user has memory changes since last daily governance run."""
         try:
+            marker = self._daily_marker_key(user_id)
             last_run = db.execute(
                 text(
                     "SELECT MAX(created_at) FROM governance_runs "
                     "WHERE task_name = :task"
                 ),
-                {"task": f"daily_user:{user_id}"},
+                {"task": marker},
             ).scalar()
             if last_run is None:
                 return True  # never governed before
@@ -348,6 +349,25 @@ class GovernanceScheduler(DbConsumer):
             return True  # fail-open: run governance if check fails
 
     @staticmethod
+    def _daily_marker_key(user_id: str) -> str:
+        """Bounded task_name for governance_runs: ``daily_user:<id_or_hash>``.
+
+        Short user_ids (≤48 chars) are kept verbatim for readability.
+        Longer ones are sha256-truncated to 16 hex chars (64-bit).
+        Total key length is always ≤64 chars (prefix 11 + id/hash ≤48).
+
+        Note: 16 hex = 64-bit hash space → ~1 in 2³² collision probability
+        at 77k users (birthday bound).  Acceptable for governance markers
+        where a collision only causes a redundant governance skip, not data loss.
+        """
+        if len(user_id) <= 48:
+            return f"daily_user:{user_id}"
+        import hashlib
+
+        uid_hash = hashlib.sha256(user_id.encode()).hexdigest()[:16]
+        return f"daily_user:{uid_hash}"
+
+    @staticmethod
     def _mark_daily_user(db: Any, user_id: str) -> None:
         """Write a per-user daily governance marker."""
         try:
@@ -357,7 +377,7 @@ class GovernanceScheduler(DbConsumer):
                     "VALUES (:task, :result, :ts)"
                 ),
                 {
-                    "task": f"daily_user:{user_id}",
+                    "task": GovernanceScheduler._daily_marker_key(user_id),
                     "result": "{}",
                     "ts": _utcnow(),
                 },
@@ -526,62 +546,82 @@ class GovernanceScheduler(DbConsumer):
     def _compress_redundant(self, user_id: str) -> int:
         """Deactivate near-duplicate memories, keeping the newer one.
 
-        Uses L2_DISTANCE on embeddings to find pairs within the configured
-        similarity threshold.  Only considers memories created within the
-        configured window to bound the search space.
+        Strategy: per memory_type, build a numpy embedding matrix and use
+        vectorized L2² distance to find near-duplicates efficiently.
+        Only considers active memories within the configured time window.
+
+        Cost control:
+        - Per-type grouping avoids cross-type comparisons.
+        - Global pairs_checked cap stops early across all types.
+        - Already-deactivated ids are skipped in inner loop.
+        - numpy vectorized diff avoids per-element Python overhead on
+          high-dimensional embeddings (e.g. 1024-d).
         """
+        import numpy as np
+
         cfg = self.config
         threshold = cfg.redundant_similarity_threshold
         window_days = cfg.redundant_window_days
         max_pairs = cfg.redundant_max_pairs
 
-        # Convert cosine-like threshold to L2 distance upper bound.
-        # For normalized embeddings: L2² = 2(1 - cos_sim), so L2 = sqrt(2(1-t)).
-        import math
-
-        l2_threshold = math.sqrt(2.0 * (1.0 - threshold))
+        # For normalized embeddings: L2² = 2(1 - cos_sim)
+        l2_sq_threshold = 2.0 * (1.0 - threshold)
 
         deactivated = 0
         with self._db() as db:
             rows = db.execute(
                 text("""
-                SELECT a.memory_id AS aid, b.memory_id AS bid,
-                       a.observed_at AS a_ts, b.observed_at AS b_ts
-                FROM mem_memories a
-                JOIN mem_memories b
-                  ON a.user_id = b.user_id
-                 AND a.memory_type = b.memory_type
-                 AND a.memory_id < b.memory_id
-                WHERE a.user_id = :uid
-                  AND a.is_active = 1 AND b.is_active = 1
-                  AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
-                  AND TIMESTAMPDIFF(DAY, a.observed_at, NOW()) <= :window
-                  AND TIMESTAMPDIFF(DAY, b.observed_at, NOW()) <= :window
-                  AND L2_DISTANCE(a.embedding, b.embedding) < :dist
-                LIMIT :lim
+                SELECT memory_id, memory_type, observed_at, embedding
+                FROM mem_memories
+                WHERE user_id = :uid
+                  AND is_active = 1
+                  AND embedding IS NOT NULL
+                  AND TIMESTAMPDIFF(DAY, observed_at, NOW()) <= :window
+                ORDER BY memory_type, observed_at DESC
             """),
-                {
-                    "uid": user_id,
-                    "window": window_days,
-                    "dist": l2_threshold,
-                    "lim": max_pairs,
-                },
+                {"uid": user_id, "window": window_days},
             ).fetchall()
 
-            if not rows:
+            if len(rows) < 2:
                 return 0
 
-            # For each pair, deactivate the older memory
+            by_type: dict[str, list] = {}
+            for r in rows:
+                by_type.setdefault(r.memory_type, []).append(r)
+
             to_deactivate: set[str] = set()
-            for aid, bid, a_ts, b_ts in rows:
-                older = aid if a_ts <= b_ts else bid
-                newer = bid if a_ts <= b_ts else aid
-                # Don't deactivate if the newer one is already marked for deactivation
-                if newer not in to_deactivate:
-                    to_deactivate.add(older)
+            pairs_checked = 0
+
+            for _mtype, group in by_type.items():
+                if len(group) < 2:
+                    continue
+                ids = [r.memory_id for r in group]
+                timestamps = [r.observed_at for r in group]
+                embs = np.array([r.embedding for r in group], dtype=np.float32)
+
+                # Group is ordered by observed_at DESC: i is newer than j when i < j
+                for i in range(len(group)):
+                    if ids[i] in to_deactivate:
+                        continue
+                    # Vectorized: compute L2² from row i to all j > i at once
+                    diffs = embs[i + 1 :] - embs[i]
+                    dists_sq = np.einsum("ij,ij->i", diffs, diffs)
+                    for k, dist_sq in enumerate(dists_sq):
+                        j = i + 1 + k
+                        if pairs_checked >= max_pairs:
+                            break
+                        if ids[j] in to_deactivate:
+                            continue
+                        pairs_checked += 1
+                        if dist_sq < l2_sq_threshold:
+                            older = ids[j] if timestamps[i] >= timestamps[j] else ids[i]
+                            to_deactivate.add(older)
+                    if pairs_checked >= max_pairs:
+                        break
+                if pairs_checked >= max_pairs:
+                    break
 
             if to_deactivate:
-                # Batch deactivate
                 ids_list = list(to_deactivate)
                 for i in range(0, len(ids_list), 500):
                     batch = ids_list[i : i + 500]

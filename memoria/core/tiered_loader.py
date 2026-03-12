@@ -30,6 +30,9 @@ class TieredLoaderStats:
     l0_loaded: bool = False
     l0_tokens: int = 0
     l0_ms: float = 0.0
+    l0_session_retrieved: int = 0  # memories fetched from DB
+    l0_session_included: int = 0  # memories actually in prompt (after token cap)
+    l0_session_ms: float = 0.0
     l1_loaded: bool = False
     l1_count: int = 0
     l1_tokens: int = 0
@@ -56,6 +59,35 @@ class TieredMemoryLoader:
             logger.debug("L0 load failed: %s", e)
             self._metrics.increment("tiered_loader_l0_errors")
             return ""
+
+    # Max tokens (approx words) for L0-session context to limit prompt noise.
+    # working/tool_result are ephemeral — keep them concise.
+    L0_SESSION_MAX_TOKENS = 200
+
+    def load_l0_session(
+        self, user_id: str, session_id: str, limit: int = 5
+    ) -> list[Any]:
+        """L0-session: load active working/tool_result memories for current session.
+
+        Returns raw Memory objects so the caller can format them.
+        Only fires when session_id is provided — no session means no session context.
+        Capped at ``limit`` items (default 5) to control token budget.
+        """
+        if not session_id:
+            return []
+        try:
+            memories, _ = self._svc.retrieve(
+                user_id=user_id,
+                query="",
+                session_id=session_id,
+                memory_types=[MemoryType.WORKING, MemoryType.TOOL_RESULT],
+                top_k=limit,
+            )
+            return memories
+        except Exception as e:
+            logger.debug("L0-session load failed: %s", e)
+            self._metrics.increment("tiered_loader_l0_session_errors")
+            return []
 
     def load_l1(
         self,
@@ -110,6 +142,30 @@ class TieredMemoryLoader:
             stats.l0_loaded = bool(l0)
             stats.l0_tokens = len(l0.split()) if l0 else 0
             stats.l0_ms = (time.time() - l0_start) * 1000
+
+        # L0-session: working/tool_result for current session.
+        # Capped by L0_SESSION_MAX_TOKENS to limit prompt noise — these are
+        # ephemeral context items, not long-term knowledge.
+        l0s_start = time.time() if explain else 0
+        l0_session = self.load_l0_session(user_id, session_id)
+        l0_included = 0
+        if l0_session:
+            lines = ["Session Context:"]
+            token_count = 2  # header
+            for m in l0_session:
+                line = f"- [{m.memory_type.value}] {m.content}"
+                line_tokens = len(line.split())
+                if token_count + line_tokens > self.L0_SESSION_MAX_TOKENS:
+                    break
+                lines.append(line)
+                token_count += line_tokens
+                l0_included += 1
+            if len(lines) > 1:  # has content beyond header
+                parts.append("\n".join(lines))
+        if stats:
+            stats.l0_session_retrieved = len(l0_session)
+            stats.l0_session_included = l0_included
+            stats.l0_session_ms = (time.time() - l0s_start) * 1000
 
         l1_start = time.time() if explain else 0
         l1, retrieval_stats = self.load_l1(
