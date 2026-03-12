@@ -613,6 +613,24 @@ Expected with local embedding — model loads into memory on first query (~3-5s)
 
 ## Development
 
+### Install from source
+
+```bash
+# Clone and install in editable mode
+git clone https://github.com/matrixorigin/Memoria.git
+cd Memoria
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install with local embedding support
+pip install -e ".[local-embedding]"
+
+# Verify installation
+memoria --version
+```
+
+**Code changes take effect immediately.** Restart your AI tool to reload the MCP server after modifying code.
+
 ### Quick setup (local dev)
 
 ```bash
