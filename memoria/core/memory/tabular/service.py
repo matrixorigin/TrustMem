@@ -291,6 +291,7 @@ class TabularMemoryService:
             scenes_created=result.scenes_created,
             cleaned_branches=result.cleaned_branches,
             cleaned_snapshots=result.cleaned_snapshots,
+            compressed_redundant=result.compressed_redundant,
             pollution_detected=result.pollution_detected,
             errors=result.errors,
             total_ms=result.total_ms,

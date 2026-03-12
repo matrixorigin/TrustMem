@@ -11,7 +11,6 @@ Governance cycles:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -54,6 +53,7 @@ class GovernanceCycleResult:
     )  # table → {centroids, imbalance, needs_rebuild}
     errors: list[str] = field(default_factory=list)
     total_ms: float = 0.0
+    compressed_redundant: int = 0
     # Observability
     input_memories: int = 0  # total active memories considered
     users_processed: int = 0
@@ -232,6 +232,7 @@ class GovernanceScheduler(DbConsumer):
                     combined.cleaned_stale += r.cleaned_stale
                     combined.quarantined += r.quarantined
                     combined.scenes_created += r.scenes_created
+                    combined.compressed_redundant += r.compressed_redundant
                     combined.input_memories += r.input_memories
                     combined.reflection_candidates_found += (
                         r.reflection_candidates_found
@@ -291,6 +292,11 @@ class GovernanceScheduler(DbConsumer):
         except Exception as e:
             logger.error("Orphaned incremental cleanup failed: %s", e)
             result.errors.append(f"orphaned_incrementals: {e}")
+        try:
+            result.compressed_redundant = self._compress_redundant(user_id)
+        except Exception as e:
+            logger.error("Redundancy compression failed: %s", e)
+            result.errors.append(f"redundant: {e}")
         # Reflection: synthesize cross-session patterns
         if reflection_engine is not None:
             try:
@@ -323,7 +329,7 @@ class GovernanceScheduler(DbConsumer):
                     "SELECT MAX(created_at) FROM governance_runs "
                     "WHERE task_name = :task"
                 ),
-                {"task": self._daily_marker_key(user_id)},
+                {"task": f"daily_user:{user_id}"},
             ).scalar()
             if last_run is None:
                 return True  # never governed before
@@ -342,11 +348,6 @@ class GovernanceScheduler(DbConsumer):
             return True  # fail-open: run governance if check fails
 
     @staticmethod
-    def _daily_marker_key(user_id: str) -> str:
-        uid_hash = hashlib.sha256(user_id.encode()).hexdigest()[:32]
-        return f"daily_user:{uid_hash}"
-
-    @staticmethod
     def _mark_daily_user(db: Any, user_id: str) -> None:
         """Write a per-user daily governance marker."""
         try:
@@ -356,7 +357,7 @@ class GovernanceScheduler(DbConsumer):
                     "VALUES (:task, :result, :ts)"
                 ),
                 {
-                    "task": GovernanceScheduler._daily_marker_key(user_id),
+                    "task": f"daily_user:{user_id}",
                     "result": "{}",
                     "ts": _utcnow(),
                 },
@@ -521,6 +522,91 @@ class GovernanceScheduler(DbConsumer):
                 "Cleaned %d orphaned incremental summaries for user %s", count, user_id
             )
         return count
+
+    def _compress_redundant(self, user_id: str) -> int:
+        """Deactivate near-duplicate memories, keeping the newer one.
+
+        Uses L2_DISTANCE on embeddings to find pairs within the configured
+        similarity threshold.  Only considers memories created within the
+        configured window to bound the search space.
+        """
+        cfg = self.config
+        threshold = cfg.redundant_similarity_threshold
+        window_days = cfg.redundant_window_days
+        max_pairs = cfg.redundant_max_pairs
+
+        # Convert cosine-like threshold to L2 distance upper bound.
+        # For normalized embeddings: L2² = 2(1 - cos_sim), so L2 = sqrt(2(1-t)).
+        import math
+
+        l2_threshold = math.sqrt(2.0 * (1.0 - threshold))
+
+        deactivated = 0
+        with self._db() as db:
+            rows = db.execute(
+                text("""
+                SELECT a.memory_id AS aid, b.memory_id AS bid,
+                       a.observed_at AS a_ts, b.observed_at AS b_ts
+                FROM mem_memories a
+                JOIN mem_memories b
+                  ON a.user_id = b.user_id
+                 AND a.memory_type = b.memory_type
+                 AND a.memory_id < b.memory_id
+                WHERE a.user_id = :uid
+                  AND a.is_active = 1 AND b.is_active = 1
+                  AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
+                  AND TIMESTAMPDIFF(DAY, a.observed_at, NOW()) <= :window
+                  AND TIMESTAMPDIFF(DAY, b.observed_at, NOW()) <= :window
+                  AND L2_DISTANCE(a.embedding, b.embedding) < :dist
+                LIMIT :lim
+            """),
+                {
+                    "uid": user_id,
+                    "window": window_days,
+                    "dist": l2_threshold,
+                    "lim": max_pairs,
+                },
+            ).fetchall()
+
+            if not rows:
+                return 0
+
+            # For each pair, deactivate the older memory
+            to_deactivate: set[str] = set()
+            for aid, bid, a_ts, b_ts in rows:
+                older = aid if a_ts <= b_ts else bid
+                newer = bid if a_ts <= b_ts else aid
+                # Don't deactivate if the newer one is already marked for deactivation
+                if newer not in to_deactivate:
+                    to_deactivate.add(older)
+
+            if to_deactivate:
+                # Batch deactivate
+                ids_list = list(to_deactivate)
+                for i in range(0, len(ids_list), 500):
+                    batch = ids_list[i : i + 500]
+                    placeholders = ", ".join(f":id{j}" for j in range(len(batch)))
+                    params: dict[str, object] = {
+                        f"id{j}": mid for j, mid in enumerate(batch)
+                    }
+                    db.execute(
+                        text(
+                            f"UPDATE mem_memories SET is_active = 0, updated_at = NOW() "
+                            f"WHERE memory_id IN ({placeholders})"
+                        ),
+                        params,
+                    )
+                db.commit()
+                deactivated = len(to_deactivate)
+
+        if deactivated:
+            logger.info(
+                "Compressed %d redundant memories for user %s (threshold=%.2f)",
+                deactivated,
+                user_id,
+                threshold,
+            )
+        return deactivated
 
     # IVF index config per table: (index_name, column, op_type_str)
     _IVF_INDEX_CONFIG = {

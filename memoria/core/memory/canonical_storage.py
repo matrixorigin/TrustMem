@@ -275,6 +275,7 @@ class CanonicalStorage:
             scenes_created=result.scenes_created,
             cleaned_branches=result.cleaned_branches,
             cleaned_snapshots=result.cleaned_snapshots,
+            compressed_redundant=result.compressed_redundant,
             pollution_detected=result.pollution_detected,
             errors=result.errors,
             total_ms=result.total_ms,
@@ -294,6 +295,7 @@ class CanonicalStorage:
         return GovernanceReport(
             cleaned_stale=r.cleaned_stale,
             quarantined=r.quarantined,
+            compressed_redundant=r.compressed_redundant,
             errors=r.errors,
             total_ms=r.total_ms,
         )

@@ -31,6 +31,9 @@ class MemoryGovernanceConfig:
     pollution_threshold: float = 0.3
     sandbox_enabled_types: tuple[str, ...] = ("profile",)
     contradiction_similarity_threshold: float = 0.85
+    redundant_similarity_threshold: float = 0.95
+    redundant_window_days: int = 90
+    redundant_max_pairs: int = 5000
 
     # ── Cleanup TTLs ──
     tool_result_ttl_hours: int = 24
@@ -100,10 +103,19 @@ class MemoryGovernanceConfig:
             "reflection_daily_threshold",
             "reflection_immediate_threshold",
             "reflection_llm_threshold",
+            "redundant_similarity_threshold",
         ):
             v = getattr(self, name)
             if not 0.0 <= v <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1], got {v}")
+        if self.redundant_window_days <= 0:
+            raise ValueError(
+                f"redundant_window_days must be positive, got {self.redundant_window_days}"
+            )
+        if self.redundant_max_pairs <= 0:
+            raise ValueError(
+                f"redundant_max_pairs must be positive, got {self.redundant_max_pairs}"
+            )
         if self.shard_count < 1:
             raise ValueError(f"shard_count must be >= 1, got {self.shard_count}")
         if not 0 <= self.shard_index < self.shard_count:

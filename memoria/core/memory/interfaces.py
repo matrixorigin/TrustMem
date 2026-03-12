@@ -127,6 +127,7 @@ class GovernanceReport:
     scenes_created: int = 0
     cleaned_branches: int = 0
     cleaned_snapshots: int = 0
+    compressed_redundant: int = 0
     pollution_detected: bool = False
     errors: list[str] | None = None
     total_ms: float = 0.0

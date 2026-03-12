@@ -172,7 +172,7 @@ class TestIncrementalGovernance:
             db.execute.call_args_list[0][1].get("parameters")
             or db.execute.call_args_list[0][0][1]
         )
-        assert params["task"] == "daily_user:2bd806c97f0e00af1a1fc3328fa763a9"
+        assert params["task"] == "daily_user:alice"
 
     def test_coalesce_handles_null_updated_at(self):
         """SQL uses COALESCE(updated_at, created_at) so NULL updated_at doesn't break GREATEST."""
@@ -199,18 +199,17 @@ class TestIncrementalGovernance:
         sql_arg = db.execute.call_args[0][0]
         params = db.execute.call_args[0][1]
         assert "INSERT" in sql_arg.text
-        assert params["task"] == "daily_user:81b637d8fcd2c6da6359e6963113a117"
+        assert params["task"] == "daily_user:bob"
         db.commit.assert_called_once()
 
-    def test_long_user_id_fits_in_task_name(self):
-        """task_name is always bounded regardless of user_id length."""
+    def test_long_user_id_in_task_name(self):
+        """task_name uses user_id directly."""
         sched = self._make_scheduler()
         db = MagicMock()
         long_uid = "u" * 500
         sched._mark_daily_user(db, long_uid)
         params = db.execute.call_args[0][1]
-        assert params["task"] == sched._daily_marker_key(long_uid)
-        assert len(params["task"]) <= 64  # prefix(11) + sha256[:32] = 43
+        assert params["task"] == f"daily_user:{long_uid}"
 
     def test_marker_not_written_on_errors(self):
         """If _run_daily_for_user returns errors, marker should NOT be written."""

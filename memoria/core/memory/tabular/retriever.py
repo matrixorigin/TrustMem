@@ -125,12 +125,41 @@ class MemoryRetriever(DbConsumer):
         weights = weights or TASK_WEIGHTS.get(
             task_hint or "default", TASK_WEIGHTS["default"]
         )
-        memory_types = memory_types or [
+
+        # ── L0: session-scoped working/tool_result (only when explicitly requested) ──
+        l0_memories: list[Memory] = []
+        if (
+            session_id
+            and memory_types is not None
+            and (
+                MemoryType.WORKING in memory_types
+                or MemoryType.TOOL_RESULT in memory_types
+            )
+        ):
+            l0_memories = self._load_l0(user_id, session_id)
+
+        # ── L1: cross-session semantic/procedural/profile (default retrieval) ──
+        l1_types = memory_types or [
             MemoryType.SEMANTIC,
             MemoryType.PROCEDURAL,
             MemoryType.PROFILE,
         ]
-        type_values = tuple(t.value for t in memory_types)
+        # Exclude L0 types from L1 query to avoid duplicates
+        l1_types = [
+            t for t in l1_types if t not in (MemoryType.WORKING, MemoryType.TOOL_RESULT)
+        ]
+        type_values = tuple(t.value for t in l1_types) if l1_types else ()
+
+        # Reserve slots for L0 in the final limit
+        l1_limit = max(1, limit - len(l0_memories))
+
+        if not type_values:
+            # Only L0 types requested — skip L1 entirely
+            memories = l0_memories[:limit]
+            if stats:
+                stats.final_count = len(memories)
+                stats.total_ms = (time.time() - start) * 1000
+            return memories, stats
 
         base_params = {
             "uid": user_id,
@@ -150,7 +179,7 @@ class MemoryRetriever(DbConsumer):
                     query_text,
                     base_params,
                     weights,
-                    limit * 2 if query_embedding else limit,
+                    l1_limit * 2 if query_embedding else l1_limit,
                 )
             if stats:
                 stats.keyword_attempted = p1_stats.keyword_attempted
@@ -160,20 +189,20 @@ class MemoryRetriever(DbConsumer):
                 stats.phase1_ms = (time.time() - p1_start) * 1000
 
             if not query_embedding:
-                memories = [self._to_memory(c, user_id) for c in phase1[:limit]]
+                l1 = [self._to_memory(c, user_id) for c in phase1[:l1_limit]]
+                memories = l0_memories + l1
+                memories = memories[:limit]
                 if stats:
-                    # Annotate scores for explain without re-ranking — preserve
-                    # SQL-side ordering which uses DB-native temporal/confidence
-                    # scoring (timestampdiff + exp).  App-side _merge uses
-                    # Python time.time() + math.exp which can differ slightly.
-                    self._annotate_scores(phase1[:limit], weights, stats)
+                    self._annotate_scores(phase1[:l1_limit], weights, stats)
                     stats.final_count = len(memories)
                     stats.total_ms = (time.time() - start) * 1000
                 return memories, stats
 
             # Phase 2
             p2_start = time.time() if explain else 0
-            phase2, p2_stats = self._phase2(db, query_embedding, base_params, limit * 2)
+            phase2, p2_stats = self._phase2(
+                db, query_embedding, base_params, l1_limit * 2
+            )
             if stats:
                 stats.vector_attempted = p2_stats.vector_attempted
                 stats.vector_hit = p2_stats.vector_hit
@@ -183,7 +212,9 @@ class MemoryRetriever(DbConsumer):
 
             # Phase 3: merge
             merge_start = time.time() if explain else 0
-            memories = self._merge(phase1, phase2, user_id, weights, limit, stats=stats)
+            l1 = self._merge(phase1, phase2, user_id, weights, l1_limit, stats=stats)
+            memories = l0_memories + l1
+            memories = memories[:limit]
             if stats:
                 stats.merged_candidates = len(
                     {c.memory_id for c in phase1} | {c.memory_id for c in phase2}
@@ -193,6 +224,53 @@ class MemoryRetriever(DbConsumer):
                 stats.total_ms = (time.time() - start) * 1000
 
             return memories, stats
+
+    def _load_l0(self, user_id: str, session_id: str) -> list[Memory]:
+        """L0: Load active working/tool_result memories for the current session.
+
+        These are always included (no scoring) — they represent immediate context.
+        Ordered by recency (newest first).
+        """
+        from memoria.core.memory.models.memory import MemoryRecord as M
+
+        with self._db() as db:
+            rows = (
+                db.query(
+                    M.memory_id,
+                    M.content,
+                    M.memory_type,
+                    M.initial_confidence,
+                    M.observed_at,
+                    M.session_id,
+                    M.trust_tier,
+                )
+                .filter(
+                    M.user_id == user_id,
+                    M.session_id == session_id,
+                    M.is_active > 0,
+                    M.memory_type.in_(
+                        (MemoryType.WORKING.value, MemoryType.TOOL_RESULT.value)
+                    ),
+                )
+                .order_by(M.observed_at.desc())
+                .limit(20)
+                .all()
+            )
+        return [
+            Memory(
+                memory_id=r.memory_id,
+                user_id=user_id,
+                memory_type=MemoryType(r.memory_type),
+                content=r.content,
+                initial_confidence=r.initial_confidence,
+                session_id=r.session_id,
+                observed_at=r.observed_at,
+                trust_tier=TrustTier(r.trust_tier)
+                if r.trust_tier
+                else TrustTier.T3_INFERRED,
+            )
+            for r in rows
+        ]
 
     def _phase1(
         self,

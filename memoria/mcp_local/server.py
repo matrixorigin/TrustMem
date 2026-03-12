@@ -435,6 +435,7 @@ class EmbeddedBackend(MemoryBackend):
             return {
                 "quarantined": result.quarantined,
                 "cleaned_stale": result.cleaned_stale,
+                "compressed_redundant": result.compressed_redundant,
                 "scenes_created": result.scenes_created,
                 "vector_index_health": result.vector_index_health,
             }
