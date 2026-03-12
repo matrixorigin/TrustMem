@@ -4,6 +4,7 @@ Usage:
     memoria init       # Detect tools, write MCP config + steering rules
     memoria status     # Show configuration status
     memoria update-rules  # Update steering rules to latest version
+    memoria benchmark  # Run one-click memory benchmark
 """
 
 from __future__ import annotations
@@ -256,6 +257,85 @@ def cmd_update_rules(args: argparse.Namespace) -> None:
         print("No rule files found. Run 'memoria init' first.")
 
 
+def cmd_benchmark(args: argparse.Namespace) -> None:
+    from memoria.core.memory.benchmark import (
+        BenchmarkExecutor,
+        load_dataset,
+        score_dataset,
+        score_scenario,
+        validate_dataset,
+    )
+
+    dataset_path = Path(args.dataset)
+    if not dataset_path.exists():
+        # Try built-in datasets shipped with the package
+        builtin = Path(__file__).parent / "datasets" / args.dataset
+        if not builtin.exists():
+            print(f"Dataset not found: {args.dataset}")
+            return
+        dataset_path = builtin
+
+    if args.validate_only:
+        errors = validate_dataset(dataset_path)
+        if errors:
+            print(f"Validation failed ({len(errors)} errors):")
+            for e in errors:
+                print(f"  ❌ {e}")
+        else:
+            print("✅ Dataset is valid.")
+        return
+
+    api_url = args.api_url
+    api_token = args.api_token
+    if not api_url or not api_token:
+        print(
+            "Benchmark requires --api-url and --api-token to run against a live Memoria instance."
+        )
+        return
+
+    dataset = load_dataset(dataset_path)
+    print(
+        f"Dataset: {dataset.dataset_id} {dataset.version} ({len(dataset.scenarios)} scenarios)"
+    )
+
+    executor = BenchmarkExecutor(
+        api_url=api_url,
+        api_token=api_token,
+        timeout=args.timeout,
+    )
+    try:
+        executions = {}
+        for scenario in dataset.scenarios:
+            print(f"  Running {scenario.scenario_id}: {scenario.title}...", end=" ")
+            execution = executor.execute(scenario)
+            executions[scenario.scenario_id] = execution
+            if execution.error:
+                print(f"ERROR: {execution.error}")
+            else:
+                result = score_scenario(scenario, execution)
+                print(f"{result.total_score:.1f} ({result.grade})")
+    finally:
+        executor.close()
+
+    report = score_dataset(dataset, executions)
+    print(f"\nOverall: {report.overall_score:.1f} ({report.overall_grade})")
+    if report.by_difficulty:
+        print(
+            "  By difficulty:", {k: f"{v:.1f}" for k, v in report.by_difficulty.items()}
+        )
+    if report.by_tag:
+        print("  By tag:", {k: f"{v:.1f}" for k, v in report.by_tag.items()})
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            report.model_dump_json(indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"  Saved: {output_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="memoria",
@@ -288,12 +368,28 @@ def main() -> None:
 
     sub.add_parser("status", help="Show MCP config and rule version status")
     sub.add_parser("update-rules", help="Update steering rules to latest version")
+    p = sub.add_parser(
+        "benchmark", help="Run benchmark against a live Memoria instance"
+    )
+    p.add_argument("dataset", help="Path to benchmark dataset JSON file")
+    p.add_argument("--api-url", help="Memoria API base URL (required for execution)")
+    p.add_argument("--api-token", help="Memoria API token (required for execution)")
+    p.add_argument(
+        "--timeout", type=float, default=30.0, help="HTTP timeout in seconds"
+    )
+    p.add_argument("--output", help="Save report to JSON file")
+    p.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Only validate the dataset file, don't run",
+    )
 
     args = parser.parse_args()
     dispatch = {
         "init": cmd_init,
         "status": cmd_status,
         "update-rules": cmd_update_rules,
+        "benchmark": cmd_benchmark,
     }
     fn = dispatch.get(args.command)
     if fn:

@@ -405,6 +405,108 @@ Graph MVP + multimodal entry point.
 
 ---
 
+## Phase 4: Memory Benchmark Suite (Weeks 14–16)
+
+**Goal:** Build a high-value, extensible benchmark that measures the upper bound of memory capability, independent of implementation details.
+
+### Deliverables
+
+#### 4.1 Capability model for "pure memory" requirements
+- Define implementation-agnostic memory capabilities:
+  - **Store fidelity**: can preserve key facts without distortion
+  - **Retrieval precision/recall**: can fetch the right memory under ambiguity
+  - **Update correctness**: can overwrite stale facts without losing valid context
+  - **Conflict handling**: can detect and resolve contradictory memories
+  - **Compression and abstraction**: can summarize many events into stable knowledge
+- Define 5 benchmark levels (L1–L5):
+  - L1: short-horizon single-fact recall
+  - L2: multi-fact recall with noise and distractors
+  - L3: contradiction, correction, and version evolution
+  - L4: long-horizon memory over many sessions
+  - L5: open-world agent workflow with governance and self-repair
+
+#### 4.2 Long-horizon track (can memory support long-term work?)
+- Add longitudinal tasks over 30/90/180 simulated days:
+  - recurring project facts with gradual drift
+  - user preference evolution and partial reversals
+  - policy/process updates requiring selective invalidation
+- Evaluate:
+  - retention under decay pressure
+  - correctness after repeated edits
+  - resilience to stale-memory interference
+- Report horizon curves (accuracy vs. elapsed sessions/time).
+
+#### 4.3 Agent-memory challenge track
+- Add stress scenarios targeting agent memory systems:
+  - near-duplicate memories with subtle semantic differences
+  - conflicting sources with different trust levels
+  - adversarial insertion (plausible but wrong facts)
+  - context-window overflow requiring selective retrieval
+  - task switching and interruption recovery
+- Include challenge tags per case (`dedup`, `conflict`, `trust`, `drift`, `interruption`, `adversarial`) for slice analysis.
+
+#### 4.4 Grading and scoring framework
+- Two score families:
+  - **Memory Quality Score (MQS)**: fact correctness, retrieval quality, consistency
+  - **Agent Utility Score (AUS)**: task completion gain attributable to memory
+- Unified weighted score:
+  - `Total = 0.65 * MQS + 0.35 * AUS`
+- Required sub-metrics:
+  - precision@k / recall@k / MRR
+  - contradiction resolution success rate
+  - correction latency (turns to recover after user correction)
+  - duplicate suppression rate
+  - governance effectiveness (pollution reduction, stale cleanup)
+- Grade bands:
+  - S (>=90), A (80–89), B (70–79), C (60–69), D (<60)
+
+#### 4.5 Scenario pack standard (easy to add real cases)
+- Define a scenario spec that supports low-cost extension from real incidents:
+  - metadata: domain, difficulty, challenge tags, horizon
+  - interaction trace: user/agent/tool turns
+  - expected memory state transitions
+  - scoring hooks: exact-match keys + LLM-judge rubric fields
+- Add a "case-to-scenario" pipeline:
+  - ingest anonymized real transcripts
+  - normalize into scenario schema
+  - review and publish as versioned benchmark packs
+- Benchmark packs are versioned (`v1`, `v1.1`, ...) and backward comparable.
+
+#### 4.6 Real interaction logic and active governance
+- Model realistic agent behavior, not single-turn QA only:
+  - detect possible duplicates and ask for merge/keep decisions
+  - accept user guidance and perform corrective update
+  - proactively trigger governance when memory health degrades
+  - maintain "working vs stable" memory boundaries during long tasks
+- Score interaction quality:
+  - guidance acceptance rate
+  - self-correction success rate
+  - unnecessary intervention rate
+
+#### 4.7 LLM/Agent-in-the-loop evaluation
+- Support both deterministic and live-agent modes:
+  - **Offline deterministic mode**: replay fixed traces for reproducible regression
+  - **Online agent mode**: run with real LLM/agent stacks (MCP-integrated)
+- Hybrid judging:
+  - rule-based checks for objective fields
+  - LLM-as-judge for nuanced semantic equivalence (with calibration set)
+- Require judge agreement checks and periodic human audit sampling.
+
+### Acceptance Criteria
+- Benchmark includes at least 120 scenarios across 6 challenge tags
+- At least 30% scenarios are derived from anonymized real cases
+- Produces stable ranking (top-3 systems unchanged across 3 reruns)
+- Outputs level-wise and tag-wise scorecards with reproducible reports
+- Demonstrates measurable long-horizon degradation/recovery curves
+
+### Resources
+2 backend + 1 evaluation engineer + 1 PM/research
+
+### Milestone M4 (Week 16)
+Memory Benchmark Suite v1 released with offline + online evaluation modes.
+
+---
+
 ## Priority Reminders
 
 **Must do first (Week 1):**
@@ -422,6 +524,8 @@ Graph MVP + multimodal entry point.
 - Phase 1 depends on Phase 0A–0C (entity-aware retrieval must exist)
 - Phase 2 depends on Phase 1 (confidence tiers must exist before triggering prompts)
 - Phase 3 is independent of Phase 2 (graph API can start in parallel with Phase 2)
+- Phase 4 depends on Phase 1 (core memory behaviors available for evaluation)
+- Phase 4 gets stronger signal with Phase 2 (governance/proactive interaction enabled)
 
 **Timeline summary:**
 
@@ -433,6 +537,7 @@ Graph MVP + multimodal entry point.
 | 1: Auto-capture | 4 weeks | Weeks 2–5 |
 | 2: Proactive prompts | 4 weeks | Weeks 6–9 |
 | 3: Visual graph | 4 weeks | Weeks 10–13 |
+| 4: Benchmark suite | 3 weeks | Weeks 14–16 |
 
 ---
 

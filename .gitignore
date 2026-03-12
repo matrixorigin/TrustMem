@@ -1,6 +1,10 @@
 # Data
 data/
 
+# Benchmark outputs (reports, results) — datasets are tracked
+/tmp/
+benchmark-result*.json
+
 # Python
 __pycache__/
 *.pyc

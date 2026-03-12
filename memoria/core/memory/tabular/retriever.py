@@ -126,16 +126,14 @@ class MemoryRetriever(DbConsumer):
             task_hint or "default", TASK_WEIGHTS["default"]
         )
 
-        # ── L0: session-scoped working/tool_result (only when explicitly requested) ──
+        # ── L0: session-scoped working/tool_result ──
+        # Always included when session_id is set, unless caller explicitly
+        # requests only non-working types (e.g. memory_types=[semantic]).
         l0_memories: list[Memory] = []
-        if (
-            session_id
-            and memory_types is not None
-            and (
-                MemoryType.WORKING in memory_types
-                or MemoryType.TOOL_RESULT in memory_types
-            )
-        ):
+        caller_excluded_l0 = memory_types is not None and not any(
+            t in memory_types for t in (MemoryType.WORKING, MemoryType.TOOL_RESULT)
+        )
+        if session_id and not caller_excluded_l0:
             l0_memories = self._load_l0(user_id, session_id)
 
         # ── L1: cross-session semantic/procedural/profile (default retrieval) ──
