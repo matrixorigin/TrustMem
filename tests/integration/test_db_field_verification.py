@@ -550,6 +550,80 @@ class TestEditorPurge:
         assert result.deactivated == 0
 
 
+class TestEditorPurgeSyncsGraphNodes:
+    def test_purge_deactivates_semantic_graph_node(self, db, db_factory):
+        from memoria.core.memory.canonical_storage import CanonicalStorage
+        from memoria.core.memory.editor import MemoryEditor
+        from memoria.core.memory.graph.graph_store import GraphStore
+        from memoria.core.memory.graph.types import GraphNodeData, NodeType
+
+        uid = _uid()
+        storage = CanonicalStorage(db_factory)
+        editor = MemoryEditor(storage, db_factory, index_manager=None, embed_client=None)
+        memory = storage.create_memory(_mem(uid, content="port is 6001", memory_type=MemoryType.SEMANTIC))
+
+        graph_store = GraphStore(db_factory)
+        graph_store.create_node(
+            GraphNodeData(
+                node_id=uuid.uuid4().hex[:32],
+                user_id=uid,
+                node_type=NodeType.SEMANTIC,
+                content=memory.content,
+                memory_id=memory.memory_id,
+                session_id=memory.session_id,
+                confidence=memory.initial_confidence,
+                trust_tier=memory.trust_tier,
+                importance=0.5,
+                is_active=True,
+            )
+        )
+
+        result = editor.purge(uid, memory_ids=[memory.memory_id], reason="test")
+
+        assert result.deactivated == 1
+        db.expire_all()
+        mem_db = db.query(MemoryRecord).filter_by(memory_id=memory.memory_id).first()
+        assert mem_db is not None
+        assert mem_db.is_active == 0
+        node = graph_store.get_node_by_memory_id(memory.memory_id)
+        assert node is not None
+        assert node.is_active is False
+
+    def test_correct_deactivates_old_semantic_graph_node(self, db, db_factory):
+        from memoria.core.memory.canonical_storage import CanonicalStorage
+        from memoria.core.memory.editor import MemoryEditor
+        from memoria.core.memory.graph.graph_store import GraphStore
+        from memoria.core.memory.graph.types import GraphNodeData, NodeType
+
+        uid = _uid()
+        storage = CanonicalStorage(db_factory)
+        editor = MemoryEditor(storage, db_factory, index_manager=None, embed_client=None)
+        memory = storage.create_memory(_mem(uid, content="port is 6001", memory_type=MemoryType.SEMANTIC))
+
+        graph_store = GraphStore(db_factory)
+        graph_store.create_node(
+            GraphNodeData(
+                node_id=uuid.uuid4().hex[:32],
+                user_id=uid,
+                node_type=NodeType.SEMANTIC,
+                content=memory.content,
+                memory_id=memory.memory_id,
+                session_id=memory.session_id,
+                confidence=memory.initial_confidence,
+                trust_tier=memory.trust_tier,
+                importance=0.5,
+                is_active=True,
+            )
+        )
+
+        new_mem = editor.correct(uid, memory.memory_id, "port is 6002", reason="test")
+
+        old_node = graph_store.get_node_by_memory_id(memory.memory_id)
+        assert old_node is not None
+        assert old_node.is_active is False
+        assert old_node.superseded_by == new_mem.memory_id
+
+
 class TestObserveExplicit:
     """canonical_storage.store() — no contradiction for unique content."""
 

@@ -9,7 +9,7 @@ See docs/design/memory/graph-memory.md §3.2
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from memoria.core.memory.graph.types import EDGE_TYPE_MULTIPLIER, Edge
 
@@ -63,11 +63,18 @@ class SpreadingActivation:
     Total DB queries = NUM_ITERATIONS (3), regardless of graph size.
     """
 
-    def __init__(self, store: GraphStore, *, task_type: str | None = None) -> None:
+    def __init__(
+        self,
+        store: GraphStore,
+        *,
+        task_type: str | None = None,
+        filter_node_ids: Callable[[set[str]], set[str]] | None = None,
+    ) -> None:
         self._store = store
         self._activation: dict[str, float] = {}
         self._out_degree: dict[str, int] = {}
         self._task_boost = TASK_EDGE_BOOST.get(task_type, None) if task_type else None
+        self._filter_node_ids = filter_node_ids
 
     def set_anchors(self, anchors: dict[str, float]) -> None:
         self._activation = dict(anchors)
@@ -155,6 +162,11 @@ class SpreadingActivation:
             s = _sigmoid(val)
             if s > 0.01:
                 self._activation[nid] = s
+        if self._filter_node_ids and self._activation:
+            allowed = self._filter_node_ids(set(self._activation))
+            self._activation = {
+                nid: score for nid, score in self._activation.items() if nid in allowed
+            }
 
     @staticmethod
     def _lateral_inhibition(raw: dict[str, float]) -> dict[str, float]:

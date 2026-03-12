@@ -184,6 +184,60 @@ class GraphStore(DbConsumer):
             )
             return _to_domain(row) if row else None
 
+    def filter_retrievable_nodes(
+        self, user_id: str, nodes: list[GraphNodeData]
+    ) -> list[GraphNodeData]:
+        """Drop semantic graph nodes whose backing canonical memory is not active.
+
+        Retrieval may operate on graph nodes, while purge/correct operate on
+        canonical mem_memories. This guard prevents stale semantic graph nodes
+        from resurfacing after the backing memory has been deleted or superseded.
+
+        Scene / entity / episodic nodes are preserved.
+        """
+        if not nodes:
+            return []
+
+        semantic_ids = [
+            n.memory_id
+            for n in nodes
+            if n.node_type == NodeType.SEMANTIC and n.memory_id
+        ]
+        if not semantic_ids:
+            return nodes
+
+        from memoria.core.memory.models.memory import MemoryRecord
+
+        with self._db() as db:
+            rows = (
+                db.query(MemoryRecord.memory_id)
+                .filter(
+                    MemoryRecord.user_id == user_id,
+                    MemoryRecord.is_active > 0,
+                    MemoryRecord.memory_id.in_(semantic_ids),
+                )
+                .all()
+            )
+            active_ids = {r.memory_id for r in rows}
+
+        filtered: list[GraphNodeData] = []
+        for node in nodes:
+            if not node.is_active:
+                continue
+            if node.node_type == NodeType.SEMANTIC and node.memory_id:
+                if node.memory_id not in active_ids:
+                    continue
+            filtered.append(node)
+        return filtered
+
+    def filter_retrievable_node_ids(
+        self, user_id: str, node_ids: set[str]
+    ) -> set[str]:
+        if not node_ids:
+            return set()
+        nodes = self.get_nodes_by_ids(list(node_ids))
+        return {n.node_id for n in self.filter_retrievable_nodes(user_id, nodes)}
+
     def find_entity_node(self, user_id: str, entity_name: str) -> GraphNodeData | None:
         """Find an existing active entity node by case-insensitive content match."""
         with self._db() as db:
@@ -631,6 +685,33 @@ class GraphStore(DbConsumer):
                 updates["superseded_by"] = superseded_by
             db.query(GraphNode).filter_by(node_id=node_id).update(updates)
             db.commit()
+
+    def deactivate_semantic_nodes_by_memory_ids(
+        self, memory_ids: list[str], *, superseded_by: str | None = None
+    ) -> int:
+        if not memory_ids:
+            return 0
+        with self._db() as db:
+            rows = (
+                db.query(GraphNode.node_id)
+                .filter(
+                    GraphNode.node_type == NodeType.SEMANTIC.value,
+                    GraphNode.memory_id.in_(memory_ids),
+                    GraphNode.is_active == 1,
+                )
+                .all()
+            )
+            node_ids = [r.node_id for r in rows]
+            if not node_ids:
+                return 0
+            updates: dict = {"is_active": 0}
+            if superseded_by:
+                updates["superseded_by"] = superseded_by
+            db.query(GraphNode).filter(GraphNode.node_id.in_(node_ids)).update(
+                updates, synchronize_session=False
+            )
+            db.commit()
+            return len(node_ids)
 
     def update_importance(self, node_id: str, importance: float) -> None:
         with self._db() as db:

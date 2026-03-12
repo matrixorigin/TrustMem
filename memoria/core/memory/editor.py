@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import text
 
+from memoria.core.memory.graph.graph_store import GraphStore
+
 if TYPE_CHECKING:
     from memoria.core.db_consumer import DbFactory
     from memoria.core.memory.canonical_storage import CanonicalStorage
@@ -46,6 +48,22 @@ class EditLogEntry:
 
 
 class MemoryEditor:
+    def _deactivate_semantic_graph_nodes(
+        self, memory_ids: list[str], *, superseded_by: str | None = None
+    ) -> int:
+        if not memory_ids:
+            return 0
+        try:
+            store = GraphStore(self._db_factory)
+            return store.deactivate_semantic_nodes_by_memory_ids(
+                memory_ids, superseded_by=superseded_by
+            )
+        except Exception:
+            logger.warning(
+                "Failed to sync semantic graph node deactivation", exc_info=True
+            )
+            return 0
+
     """Inject, correct, and purge memories with audit trail.
 
     All destructive operations create a snapshot first.
@@ -267,6 +285,10 @@ class MemoryEditor:
         store = MemoryStore(self._db_factory)
         result = store.supersede(memory_id, new_mem)
 
+        self._deactivate_semantic_graph_nodes(
+            [memory_id], superseded_by=result.memory_id
+        )
+
         if self._index_manager:
             self._index_manager.on_memories_stored(
                 user_id, [result], session_id=old.session_id
@@ -326,18 +348,33 @@ class MemoryEditor:
             if memory_types:
                 type_vals = [mt.value for mt in memory_types]
                 for tv in type_vals:
+                    select_q = (
+                        "SELECT memory_id FROM mem_memories "
+                        "WHERE user_id = :uid AND memory_type = :mt AND is_active = 1"
+                    )
                     q = (
                         "UPDATE mem_memories SET is_active = 0, updated_at = NOW() "
                         "WHERE user_id = :uid AND memory_type = :mt AND is_active = 1"
                     )
                     params: dict[str, Any] = {"uid": user_id, "mt": tv}
                     if before:
+                        select_q += " AND observed_at < :before"
                         q += " AND observed_at < :before"
                         params["before"] = before
+                    rows = db.execute(text(select_q), params).fetchall()
+                    purged_ids.extend(r.memory_id for r in rows)
                     result = db.execute(text(q), params)
                     deactivated += result.rowcount
 
             if before and not memory_ids and not memory_types:
+                rows = db.execute(
+                    text(
+                        "SELECT memory_id FROM mem_memories "
+                        "WHERE user_id = :uid AND is_active = 1 AND observed_at < :before"
+                    ),
+                    {"uid": user_id, "before": before},
+                ).fetchall()
+                purged_ids.extend(r.memory_id for r in rows)
                 result = db.execute(
                     text(
                         "UPDATE mem_memories SET is_active = 0, updated_at = NOW() "
@@ -347,7 +384,11 @@ class MemoryEditor:
                 )
                 deactivated += result.rowcount
 
+            purged_ids = list(dict.fromkeys(purged_ids))
             db.commit()
+
+        if deactivated > 0:
+            self._deactivate_semantic_graph_nodes(purged_ids)
 
         if self._index_manager and deactivated > 0:
             self._index_manager.on_governance(user_id)

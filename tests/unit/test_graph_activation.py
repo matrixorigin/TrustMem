@@ -36,6 +36,9 @@ class TestSpreadingActivation:
         store = MagicMock()
         store.get_edges_bidirectional.return_value = ({}, {})
         store.get_edges_for_nodes.return_value = {}
+        store.filter_retrievable_node_ids.side_effect = lambda _user_id, node_ids: set(
+            node_ids
+        )
         return store
 
     def test_no_anchors_no_activation(self):
@@ -83,6 +86,38 @@ class TestSpreadingActivation:
         sa.propagate()
         assert sa.get_activated() == {}
 
+    def test_filter_node_ids_prunes_activation_between_steps(self):
+        store = self._make_store()
+
+        def mock_bidir(node_ids):
+            incoming = {nid: [] for nid in node_ids}
+            outgoing = {nid: [] for nid in node_ids}
+            if "a" in node_ids:
+                outgoing["a"] = [Edge("b", "association", 1.0)]
+            if "b" in node_ids:
+                outgoing["b"] = [Edge("c", "association", 1.0)]
+                incoming["b"] = [Edge("a", "association", 1.0)]
+            if "c" in node_ids:
+                incoming["c"] = [Edge("b", "association", 1.0)]
+            return incoming, outgoing
+
+        store.get_edges_bidirectional.side_effect = mock_bidir
+        store.get_edges_for_nodes.side_effect = lambda ids: {
+            nid: [Edge("x", "association", 1.0)] if nid in {"a", "b"} else []
+            for nid in ids
+        }
+
+        sa = SpreadingActivation(
+            store,
+            filter_node_ids=lambda node_ids: {nid for nid in node_ids if nid != "b"},
+        )
+        sa.set_anchors({"a": 0.8})
+        sa.propagate(iterations=2)
+
+        result = sa.get_activated()
+        assert "b" not in result
+        assert "c" not in result
+
 
 class TestEffectiveConfidence:
     def test_no_created_at(self):
@@ -121,6 +156,10 @@ class TestActivationRetriever:
         store.get_edges_bidirectional.return_value = ({}, {})
         store.get_edges_for_nodes.return_value = {}
         store.get_nodes_by_ids.return_value = []
+        store.filter_retrievable_node_ids.side_effect = lambda _user_id, node_ids: set(
+            node_ids
+        )
+        store.filter_retrievable_nodes.side_effect = lambda _user_id, nodes: nodes
         return ActivationRetriever(store), store
 
     def test_fallback_when_graph_too_small(self):

@@ -128,16 +128,25 @@ class ActivationRetriever:
             query_embedding,
             top_k=anchor_k,
         )
-        for node, sim in vector_results:
-            anchors[node.node_id] = max(sim, 0.0)
+        if vector_results:
+            retrievable_vector_ids = self._store.filter_retrievable_node_ids(
+                user_id, {node.node_id for node, _score in vector_results}
+            )
+            for node, sim in vector_results:
+                if node.node_id in retrievable_vector_ids:
+                    anchors[node.node_id] = max(sim, 0.0)
         anchor_semantic = dict(anchors)
 
         # 1b. BM25 anchors (fulltext MATCH...AGAINST)
         try:
             bm25_results = self._store.fulltext_search(user_id, query, top_k=anchor_k)
-            for node, _score in bm25_results:
-                if node.node_id not in anchors:
-                    anchors[node.node_id] = 0.7  # BM25 anchors slightly below vector
+            if bm25_results:
+                retrievable_bm25_ids = self._store.filter_retrievable_node_ids(
+                    user_id, {node.node_id for node, _score in bm25_results}
+                )
+                for node, _score in bm25_results:
+                    if node.node_id in retrievable_bm25_ids and node.node_id not in anchors:
+                        anchors[node.node_id] = 0.7  # BM25 anchors slightly below vector
         except Exception:
             logger.debug(
                 "Fulltext search failed, using vector-only anchors", exc_info=True
@@ -150,14 +159,23 @@ class ActivationRetriever:
         #    entity nodes in mem_entities, reverse-lookup linked memory_ids,
         #    then find their graph nodes and inject as additional anchors.
         entity_node_ids, entity_memory_ids = self._entity_recall(user_id, query)
+        retrievable_entity_ids = self._store.filter_retrievable_node_ids(
+            user_id, entity_node_ids
+        )
 
         # Inject entity graph nodes as activation anchors (lower initial activation)
-        for nid in entity_node_ids:
+        for nid in retrievable_entity_ids:
             if nid not in anchors:
                 anchors[nid] = 0.8  # entity anchors slightly below vector anchors
 
         # 3. Spreading activation — DB-side edge traversal (§13.1 task boost)
-        sa = SpreadingActivation(self._store, task_type=task_type)
+        sa = SpreadingActivation(
+            self._store,
+            task_type=task_type,
+            filter_node_ids=lambda node_ids: self._store.filter_retrievable_node_ids(
+                user_id, node_ids
+            ),
+        )
         sa.set_anchors(anchors)
         sa.propagate(iterations=iterations)
         activation_map = sa.get_activated(min_activation=0.01)
@@ -177,6 +195,7 @@ class ActivationRetriever:
 
         # 5. Fetch only the candidate nodes (not full graph)
         candidates = self._store.get_nodes_by_ids(list(candidate_ids))
+        candidates = self._store.filter_retrievable_nodes(user_id, candidates)
 
         # 6. Score
         entity_boost = self._config.entity_boost

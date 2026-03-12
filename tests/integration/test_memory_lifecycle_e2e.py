@@ -684,6 +684,93 @@ class TestUserIsolation:
         assert b_db.content == "B fresh"
 
 
+class TestPurgeDoesNotResurfaceViaActivation:
+    def test_stale_graph_anchor_is_filtered_when_backing_memory_inactive(
+        self, db, db_factory
+    ):
+        from memoria.core.memory.graph.graph_store import GraphStore
+        from memoria.core.memory.graph.retriever import ActivationRetriever
+        from memoria.core.memory.graph.types import GraphNodeData, NodeType
+
+        uid = _uid()
+        graph_store = GraphStore(db_factory)
+        retriever = ActivationRetriever(graph_store)
+
+        target_embedding = _embed(0.11)
+        target = _insert(
+            db,
+            uid,
+            "The user's MatrixOne port is 6001.",
+            embedding=target_embedding,
+            initial_confidence=1.0,
+        )
+        graph_store.create_node(
+            GraphNodeData(
+                node_id=uuid.uuid4().hex[:32],
+                user_id=uid,
+                node_type=NodeType.SEMANTIC,
+                content=target.content,
+                embedding=target_embedding,
+                memory_id=target.memory_id,
+                session_id=target.session_id,
+                confidence=target.initial_confidence,
+                trust_tier=target.trust_tier,
+                importance=0.9,
+                is_active=True,
+            )
+        )
+
+        for idx in range(9):
+            embedding = _embed(0.2 + idx * 0.01)
+            filler = _insert(
+                db,
+                uid,
+                f"filler memory {idx}",
+                embedding=embedding,
+                initial_confidence=0.8,
+            )
+            graph_store.create_node(
+                GraphNodeData(
+                    node_id=uuid.uuid4().hex[:32],
+                    user_id=uid,
+                    node_type=NodeType.SEMANTIC,
+                    content=filler.content,
+                    embedding=embedding,
+                    memory_id=filler.memory_id,
+                    session_id=filler.session_id,
+                    confidence=filler.initial_confidence,
+                    trust_tier=filler.trust_tier,
+                    importance=0.2,
+                    is_active=True,
+                )
+            )
+
+        retrieved_before = retriever.retrieve(
+            uid,
+            "MatrixOne port",
+            target_embedding,
+            top_k=10,
+        )
+        assert any(node.memory_id == target.memory_id for node, _ in retrieved_before)
+
+        db.execute(
+            text(
+                "UPDATE mem_memories SET is_active = 0, updated_at = NOW() "
+                "WHERE memory_id = :mid"
+            ),
+            {"mid": target.memory_id},
+        )
+        db.commit()
+
+        retrieved_after = retriever.retrieve(
+            uid,
+            "MatrixOne port",
+            target_embedding,
+            top_k=10,
+        )
+        assert all(node.memory_id != target.memory_id for node, _ in retrieved_after)
+
+
 # ── Phase 8: Stale Inactive Cleanup ──────────────────────────────────
 
 
