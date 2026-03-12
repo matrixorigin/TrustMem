@@ -1,0 +1,18 @@
+pull_request_rules:
+  - name: Automatic merge on approval
+    conditions:
+      - "#approved-reviews-by>=1"
+      - check-success=test
+      - -draft
+      - label!=do-not-merge
+    actions:
+      merge:
+        method: squash
+
+  - name: Auto merge for dependabot
+    conditions:
+      - author=dependabot[bot]
+      - check-success=test
+    actions:
+      merge:
+        method: squash
