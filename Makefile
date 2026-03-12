@@ -1,4 +1,4 @@
-.PHONY: help start stop logs status build test test-docker test-mcp test-all-cov clean reset \
+.PHONY: help start stop logs status build test test-fast test-slow test-docker test-mcp test-all-cov clean reset \
         cloud-start cloud-stop cloud-logs cloud-status cloud-health cloud-clean cloud-rebuild \
         install dev build-wheel publish publish-test bump-version check lint format type-check \
         new-key list-keys revoke-keys
@@ -217,14 +217,20 @@ dev:
 # ── Tests ───────────────────────────────────────────────────────────
 
 test:
-	@python -m pytest tests/unit/ memoria/tests/test_e2e.py memoria/tests/test_mcp.py tests/integration/ -v -n auto --dist=loadgroup
+	@python -m pytest tests/unit/ memoria/tests/test_e2e.py memoria/tests/test_mcp.py tests/integration/ -v -n auto --dist=loadgroup --ignore=tests/integration/test_mcp_stdio_e2e.py
 	@echo "For Docker tests: make start && make test-docker"
+
+test-fast:
+	@python -m pytest tests/unit/ memoria/tests/test_e2e.py memoria/tests/test_mcp.py -v -n auto
+
+test-slow:
+	@python -m pytest tests/integration/ -v -n auto --dist=loadgroup --ignore=tests/integration/test_mcp_stdio_e2e.py
 
 test-unit:
 	@python -m pytest tests/unit/ -v -n auto
 
 test-integration:
-	@python -m pytest tests/integration/ -v -n auto --dist=loadgroup
+	@python -m pytest tests/integration/ -v -n auto --dist=loadgroup --ignore=tests/integration/test_mcp_stdio_e2e.py
 
 test-docker:
 	@echo "Requires: make start"
