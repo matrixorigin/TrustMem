@@ -1,6 +1,6 @@
 .PHONY: help start stop logs status build test test-docker test-mcp test-all-cov clean reset \
         cloud-start cloud-stop cloud-logs cloud-status cloud-health cloud-clean cloud-rebuild \
-        install dev build-wheel publish publish-test bump-version check lint type-check \
+        install dev build-wheel publish publish-test bump-version check lint format type-check \
         new-key list-keys revoke-keys
 
 # Load environment variables from .env file if it exists
@@ -31,6 +31,7 @@ help:
 	@echo "  make install            Install dependencies (editable)"
 	@echo "  make dev                Start API locally (no Docker, needs DB)"
 	@echo "  make check              Run lint + type check"
+	@echo "  make format             Auto-fix and reformat code"
 	@echo "  make bump-version BUMP=patch  - Bump version (patch/minor/major)"
 	@echo ""
 	@echo "Tests:"
@@ -202,6 +203,10 @@ check: lint type-check
 lint:
 	@ruff check memoria/ tests/
 	@ruff format --check memoria/ tests/
+
+format:
+	@ruff check --fix memoria/ tests/
+	@ruff format memoria/ tests/
 
 type-check:
 	@mypy memoria/

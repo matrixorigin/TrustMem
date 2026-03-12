@@ -1,4 +1,4 @@
-name: Test Suite
+name: Tests
 
 on:
   push:
@@ -7,32 +7,17 @@ on:
     branches: [main, develop]
 
 jobs:
-  # ── Job 1: Unit tests (no DB needed) ─────────────────────────────────
-  unit:
+  # ── Job 1: Full test suite (needs MatrixOne) ──────────────────────────
+  test:
+    name: test
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
-          restore-keys: ${{ runner.os }}-pip-
-
-      - name: Install dependencies
-        run: pip install -e ".[dev,openai-embedding]"
-
-      - name: Run unit tests
-        run: make test-unit
-
-  # ── Job 2: E2E + MCP tests (needs MatrixOne) ─────────────────────────
-  e2e:
-    runs-on: ubuntu-latest
-    needs: unit
+    env:
+      MEMORIA_MASTER_KEY: ci-master-key-memoria-test
+      MEMORIA_EMBEDDING_PROVIDER: openai
+      MEMORIA_EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL || 'BAAI/bge-m3' }}
+      MEMORIA_EMBEDDING_DIM: ${{ vars.EMBEDDING_DIM || '1024' }}
+      MEMORIA_EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+      MEMORIA_EMBEDDING_BASE_URL: ${{ vars.EMBEDDING_BASE_URL || '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -77,19 +62,13 @@ jobs:
         run: pip install -e ".[dev,openai-embedding]"
 
       - name: Run all tests
-        env:
-          MEMORIA_MASTER_KEY: ci-master-key-memoria-test
-          MEMORIA_EMBEDDING_PROVIDER: openai
-          MEMORIA_EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL || 'BAAI/bge-m3' }}
-          MEMORIA_EMBEDDING_DIM: ${{ vars.EMBEDDING_DIM || '1024' }}
-          MEMORIA_EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
-          MEMORIA_EMBEDDING_BASE_URL: ${{ vars.EMBEDDING_BASE_URL || '' }}
         run: make test
 
-  # ── Job 3: Docker regression tests ───────────────────────────────────
+  # ── Job 2: Docker regression tests ───────────────────────────────────
   docker:
+    name: docker
     runs-on: ubuntu-latest
-    needs: unit
+    needs: test
 
     steps:
       - uses: actions/checkout@v4

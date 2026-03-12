@@ -1,4 +1,4 @@
-name: Static Checks
+name: Lint & Type Check
 
 on:
   push:
@@ -7,38 +7,27 @@ on:
     branches: [main, develop]
 
 jobs:
-  lint:
+  static-checks:
+    name: ruff + mypy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-check-${{ hashFiles('pyproject.toml') }}
-          restore-keys: ${{ runner.os }}-pip-check-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-      - name: Run ruff
-        run: ruff check memoria/ tests/
-      - name: Check formatting
-        run: ruff format --check memoria/ tests/
 
-  type-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-check-${{ hashFiles('pyproject.toml') }}
           restore-keys: ${{ runner.os }}-pip-check-
+
       - name: Install dependencies
         run: pip install -e ".[dev]"
-      - name: Run mypy
-        run: mypy memoria/
+
+      - name: Lint & format check
+        run: make lint
+
+      - name: Type check
+        run: make type-check
