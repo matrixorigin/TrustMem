@@ -401,18 +401,15 @@ class TestGetNodesByIdsActiveFilter:
 class TestEdgeActiveNodeFilter:
     """Edge query methods must not return edges to/from inactive nodes."""
 
-    def _make_store_with_subquery(self):
+    def _make_store(self):
         from memoria.core.memory.graph.graph_store import GraphStore
 
         store = GraphStore.__new__(GraphStore)
         mock_db = MagicMock()
-        mock_subquery = MagicMock()
-        mock_db.query.return_value.filter.return_value.subquery.return_value = (
-            mock_subquery
-        )
-        # For edge queries: chain is query().filter_by().filter().all() or query().filter().filter().all()
-        mock_db.query.return_value.filter_by.return_value.filter.return_value.all.return_value = []
-        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
+        # JOIN-based queries: query().join().filter().all()
+        mock_db.query.return_value.join.return_value.filter.return_value.all.return_value = []
+        # UNION-based queries: db.execute(...).fetchall()
+        mock_db.execute.return_value.fetchall.return_value = []
         store._db = MagicMock(
             return_value=MagicMock(
                 __enter__=lambda s: mock_db,
@@ -422,31 +419,37 @@ class TestEdgeActiveNodeFilter:
         return store, mock_db
 
     def test_get_outgoing_edges_filters_inactive_targets(self):
-        store, mock_db = self._make_store_with_subquery()
-        store.get_outgoing_edges("n1")
-        # Should call _active_node_ids (query GraphNode) then filter edges
-        assert mock_db.query.call_count >= 2  # subquery + edge query
+        store, mock_db = self._make_store()
+        result = store.get_outgoing_edges("n1")
+        # JOIN-based: query(GraphEdge).join(GraphNode, ...).filter(...).all()
+        assert mock_db.query.call_count >= 1
+        assert isinstance(result, list)
 
     def test_get_incoming_edges_filters_inactive_sources(self):
-        store, mock_db = self._make_store_with_subquery()
-        store.get_incoming_edges("n1")
-        assert mock_db.query.call_count >= 2
+        store, mock_db = self._make_store()
+        result = store.get_incoming_edges("n1")
+        assert mock_db.query.call_count >= 1
+        assert isinstance(result, list)
 
     def test_get_edges_for_nodes_filters_inactive(self):
-        store, mock_db = self._make_store_with_subquery()
-        store.get_edges_for_nodes({"n1", "n2"})
-        assert mock_db.query.call_count >= 2
+        store, mock_db = self._make_store()
+        result = store.get_edges_for_nodes({"n1", "n2"})
+        assert mock_db.query.call_count >= 1
+        assert isinstance(result, dict)
 
     def test_get_edges_bidirectional_filters_inactive(self):
-        store, mock_db = self._make_store_with_subquery()
-        incoming, outgoing = store.get_edges_bidirectional({"n1"})
-        # subquery + 2 edge queries (out + in)
-        assert mock_db.query.call_count >= 3
+        store, mock_db = self._make_store()
+        with patch("sqlalchemy.union_all") as mock_union:
+            mock_union.return_value = MagicMock()
+            incoming, outgoing = store.get_edges_bidirectional({"n1"})
+        assert mock_union.call_count == 1
         assert isinstance(incoming, dict)
         assert isinstance(outgoing, dict)
 
     def test_get_neighbor_ids_filters_inactive(self):
-        store, mock_db = self._make_store_with_subquery()
-        result = store.get_neighbor_ids({"n1"})
-        assert mock_db.query.call_count >= 3  # subquery + 2 edge queries
+        store, mock_db = self._make_store()
+        with patch("sqlalchemy.union_all") as mock_union:
+            mock_union.return_value = MagicMock()
+            result = store.get_neighbor_ids({"n1"})
+        assert mock_union.call_count == 1
         assert isinstance(result, set)
