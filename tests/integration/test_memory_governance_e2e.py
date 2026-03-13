@@ -426,7 +426,8 @@ class TestGovernanceAuditLog:
         """No edit_log entry written when governance finds nothing to deactivate."""
         user_id = _uid()
         config = MemoryGovernanceConfig(
-            working_memory_stale_hours=9999, tool_result_ttl_hours=9999,
+            working_memory_stale_hours=9999,
+            tool_result_ttl_hours=9999,
             quarantine_threshold=0.0,
         )
         scheduler = GovernanceScheduler(db_factory, config=config)
