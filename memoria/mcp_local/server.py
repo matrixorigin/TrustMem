@@ -2662,16 +2662,19 @@ def main():
         if not db_url:
             try:
                 from memoria.config import get_settings
+
                 db_url = get_settings().db_url
             except Exception:
                 # Fallback to hardcoded default if config loading fails
                 from memoria.schema import DEFAULT_DB_URL
+
                 db_url = DEFAULT_DB_URL
-        
+
         if not db_url:
             from memoria.schema import DEFAULT_DB_URL
+
             db_url = DEFAULT_DB_URL
-            
+
         backend = EmbeddedBackend(db_url=db_url)
 
     server = create_server(backend, default_user=args.user)
