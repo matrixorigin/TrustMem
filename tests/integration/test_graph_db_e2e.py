@@ -1002,7 +1002,7 @@ class TestEntityLinking:
         from memoria.core.memory.graph.types import EdgeType, NodeType
         from memoria.core.memory.types import Memory, MemoryType, TrustTier
 
-        builder = GraphBuilder(store)
+        builder = GraphBuilder(store, embed_fn=lambda x: _embed())
         mem = Memory(
             memory_id=uuid4().hex,
             user_id=user_id,
@@ -1035,7 +1035,7 @@ class TestEntityLinking:
         from memoria.core.memory.graph.types import NodeType
         from memoria.core.memory.types import Memory, MemoryType, TrustTier
 
-        builder = GraphBuilder(store)
+        builder = GraphBuilder(store, embed_fn=lambda x: _embed())
         mem1 = Memory(
             memory_id=uuid4().hex,
             user_id=user_id,
@@ -1091,7 +1091,7 @@ class TestEntityLinking:
         from memoria.core.memory.graph.types import NodeType
         from memoria.core.memory.types import Memory, MemoryType, TrustTier
 
-        builder = GraphBuilder(store)
+        builder = GraphBuilder(store, embed_fn=lambda x: _embed())
         mem = Memory(
             memory_id=uuid4().hex,
             user_id=user_id,
@@ -1118,7 +1118,7 @@ class TestEntityLinking:
         from memoria.core.memory.graph.types import NodeType
         from memoria.core.memory.types import Memory, MemoryType, TrustTier
 
-        builder = GraphBuilder(store)
+        builder = GraphBuilder(store, embed_fn=lambda x: _embed())
         mem = Memory(
             memory_id=uuid4().hex,
             user_id=user_id,

@@ -63,6 +63,7 @@ class SeedMemory(BaseModel):
 
 MaturationOp = Literal[
     "extract_entities",
+    "extract_entities_llm",
     "consolidate",
     "governance",
     "reflect",
@@ -83,6 +84,7 @@ class ScenarioStep(BaseModel):
     reason: str | None = None
     # For purge:
     memory_ids: list[str] | None = None
+    topic: str | None = None  # purge by keyword (no IDs needed)
 
     @model_validator(mode="after")
     def _check_fields(self) -> "ScenarioStep":

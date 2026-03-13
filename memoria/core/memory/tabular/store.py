@@ -24,6 +24,7 @@ def _to_domain(row: MemoryRecord) -> Memory:
         source_event_ids=row.source_event_ids or [],
         superseded_by=row.superseded_by,
         is_active=bool(row.is_active),
+        access_count=row.access_count or 0,
         session_id=row.session_id,
         observed_at=row.observed_at,
         created_at=row.created_at,
@@ -46,6 +47,7 @@ def _to_domain_light(row) -> Memory:
         source_event_ids=row.source_event_ids or [],
         superseded_by=row.superseded_by,
         is_active=bool(row.is_active),
+        access_count=getattr(row, "access_count", 0) or 0,
         session_id=row.session_id,
         observed_at=row.observed_at,
         created_at=row.created_at,
@@ -129,6 +131,16 @@ class MemoryStore(DbConsumer):
         with Timer("store_get", self._metrics), self._db() as db:
             row = db.query(MemoryRecord).filter_by(memory_id=memory_id).first()
             return _to_domain(row) if row else None
+
+    def get_by_ids(self, memory_ids: list[str]) -> dict[str, Memory]:
+        """Batch fetch memories by ID. Returns {memory_id: Memory} for found rows."""
+        if not memory_ids:
+            return {}
+        with self._db() as db:
+            rows = db.query(MemoryRecord).filter(
+                MemoryRecord.memory_id.in_(memory_ids)
+            ).all()
+            return {r.memory_id: _to_domain(r) for r in rows}
 
     def update_content(self, memory_id: str, content: str) -> None:
         """Update content of an existing memory (e.g. streaming accumulation)."""
@@ -252,3 +264,22 @@ class MemoryStore(DbConsumer):
             row.is_active = 0
             db.commit()
             return True
+
+    def increment_access_counts(self, memory_ids: list[str]) -> None:
+        """Batch-increment access_count for retrieved memories."""
+        if not memory_ids:
+            return
+        with self._db() as db:
+            from sqlalchemy import text as sa_text
+
+            # Single UPDATE with IN clause — one round-trip
+            placeholders = ",".join(f":id{i}" for i in range(len(memory_ids)))
+            params = {f"id{i}": mid for i, mid in enumerate(memory_ids)}
+            db.execute(
+                sa_text(
+                    f"UPDATE mem_memories SET access_count = access_count + 1 "
+                    f"WHERE memory_id IN ({placeholders})"
+                ),
+                params,
+            )
+            db.commit()

@@ -139,6 +139,54 @@ class BenchmarkExecutor:
             execution.error = str(e)
         return execution
 
+    def setup(self, scenario: Scenario) -> str:
+        """Seed + maturation only. Returns the user_id for later evaluate() calls."""
+        sid = scenario.scenario_id.lower()
+        user_id = f"bench-{self._run_id}-{sid}"
+        if self._owned:
+            self._client.close()
+            self._client = self._make_client(sid)
+        session_id = f"bench-{self._run_id}-{sid}"
+
+        for seed in scenario.seed_memories:
+            self._store(seed.content, seed.memory_type, session_id)
+
+        for op in scenario.maturation:
+            self._run_maturation(op, user_id)
+
+        for step in scenario.steps:
+            self._run_step(step, session_id)
+
+        return user_id
+
+    def evaluate(
+        self, scenario: Scenario, user_id: str, strategy: str,
+    ) -> ScenarioExecution:
+        """Run assertions only against an already-seeded user, with a given strategy."""
+        sid = scenario.scenario_id.lower()
+        session_id = f"bench-{self._run_id}-{sid}"
+        # Ensure client has the right user header
+        if self._owned:
+            self._client.close()
+            self._client = self._make_client(sid)
+
+        # Reset access counts so evaluation order doesn't affect frequency boost
+        self._client.post(
+            f"/admin/users/{user_id}/reset-access-counts",
+            headers={"Authorization": f"Bearer {self._api_token}"},
+        )
+
+        self._set_strategy(user_id, strategy)
+
+        execution = ScenarioExecution(scenario_id=scenario.scenario_id)
+        try:
+            for assertion in scenario.assertions:
+                assertion_result = self._run_assertion(assertion, session_id)
+                execution.assertion_results.append(assertion_result)
+        except Exception as e:
+            execution.error = str(e)
+        return execution
+
     def _store(self, content: str, memory_type: str, session_id: str) -> bool:
         resp = self._client.post(
             "/v1/memories",
@@ -205,11 +253,17 @@ class BenchmarkExecutor:
         )
         return resp.status_code < 400
 
-    def _purge(self, memory_ids: list[str], reason: str) -> bool:
-        resp = self._client.post(
-            "/v1/memories/purge",
-            json={"memory_ids": memory_ids, "reason": reason},
-        )
+    def _purge(
+        self, memory_ids: list[str], reason: str, topic: str | None = None
+    ) -> bool:
+        body: dict = {"reason": reason}
+        if topic:
+            body["topic"] = topic
+        elif memory_ids:
+            body["memory_ids"] = memory_ids
+        else:
+            return True  # nothing to purge
+        resp = self._client.post("/v1/memories/purge", json=body)
         return resp.status_code < 400
 
     def _run_step(self, step: ScenarioStep, session_id: str) -> StepResult:
@@ -234,7 +288,9 @@ class BenchmarkExecutor:
                 return StepResult(action="correct", success=ok)
             elif step.action == "purge":
                 ok = self._purge(
-                    step.memory_ids or [], reason=step.reason or "benchmark purge"
+                    step.memory_ids or [],
+                    reason=step.reason or "benchmark purge",
+                    topic=step.topic,
                 )
                 return StepResult(action="purge", success=ok)
             else:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field
 from memoria.api.database import get_db_factory
 from memoria.api.dependencies import get_current_user_id
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["memory"])
 
 
@@ -50,6 +52,7 @@ class CorrectByQueryRequest(BaseModel):
 
 class PurgeRequest(BaseModel):
     memory_ids: list[str] | None = None
+    topic: str | None = None  # bulk-delete by keyword match
     memory_types: list[str] | None = None
     before: datetime | None = None
     reason: str = ""
@@ -235,9 +238,20 @@ def retrieve_memories(
     memory_types = (
         [MemoryType(t) for t in req.memory_types] if req.memory_types else None
     )
+
+    # Embed query for vector search and activation strategy
+    query_embedding = None
+    try:
+        from memoria.core.embedding import get_embedding_client
+
+        query_embedding = get_embedding_client().embed(req.query)
+    except Exception as e:
+        logger.warning("retrieve: failed to embed query, graph/vector path degraded: %s", e)
+
     memories, _meta = svc.retrieve(
         user_id,
         req.query,
+        query_embedding=query_embedding,
         top_k=req.top_k,
         memory_types=memory_types,
         session_id=req.session_id or "",
@@ -253,7 +267,18 @@ def search_memories(
     db_factory=Depends(get_db_factory),
 ):
     svc = _get_service(db_factory, user_id=user_id)
-    memories, _meta = svc.retrieve(user_id, req.query, top_k=req.top_k)
+
+    query_embedding = None
+    try:
+        from memoria.core.embedding import get_embedding_client
+
+        query_embedding = get_embedding_client().embed(req.query)
+    except Exception as e:
+        logger.warning("search: failed to embed query, vector search degraded: %s", e)
+
+    memories, _meta = svc.retrieve(
+        user_id, req.query, query_embedding=query_embedding, top_k=req.top_k,
+    )
     return [_to_response(m) for m in memories]
 
 
@@ -315,6 +340,40 @@ def purge_memories(
     from memoria.core.memory.types import MemoryType
 
     editor = _get_editor(db_factory, user_id)
+
+    # Topic purge: find matching memory_ids via fulltext search, then purge by ID
+    if req.topic and not req.memory_ids:
+        from sqlalchemy import text as sa_text
+
+        try:
+            from matrixone.sqlalchemy_ext import boolean_match
+            from memoria.core.memory.models.memory import MemoryRecord
+
+            with db_factory() as db:
+                ft = boolean_match("content").must(req.topic)
+                rows = (
+                    db.query(MemoryRecord.memory_id)
+                    .filter_by(user_id=user_id, is_active=1)
+                    .filter(ft)
+                    .all()
+                )
+        except Exception:
+            # Fallback to LIKE if fulltext unavailable
+            with db_factory() as db:
+                rows = db.execute(
+                    sa_text(
+                        "SELECT memory_id FROM mem_memories "
+                        "WHERE user_id = :uid AND is_active = 1 AND content LIKE :pat"
+                    ),
+                    {"uid": user_id, "pat": f"%{req.topic}%"},
+                ).fetchall()
+
+        ids = [r[0] for r in rows]
+        if not ids:
+            return {"purged": 0}
+        result = editor.purge(user_id, memory_ids=ids, reason=req.reason or f"topic purge: {req.topic}")
+        return {"purged": result.deactivated}
+
     memory_types = (
         [MemoryType(t) for t in req.memory_types] if req.memory_types else None
     )

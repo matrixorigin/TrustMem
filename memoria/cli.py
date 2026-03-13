@@ -302,12 +302,69 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
     if strategy:
         print(f"Strategy: {strategy}")
 
+    if getattr(args, "grid_search", False):
+        from memoria.core.memory.benchmark.grid_search import (
+            FAST_GRID,
+            FULL_GRID,
+            run_grid_search,
+        )
+
+        grid_level = getattr(args, "grid_level", "fast")
+        grid = FULL_GRID if grid_level == "full" else FAST_GRID
+        combos = 1
+        for v in grid.values():
+            combos *= len(v)
+        print(f"Grid search: {grid_level} ({combos} combinations)")
+
+        run_grid_search(
+            dataset_path=str(dataset_path),
+            api_url=api_url,
+            api_token=api_token,
+            compose_dir=str(Path(__file__).parent.parent),
+            grid=grid,
+            timeout=args.timeout,
+        )
+        return
+
     executor = BenchmarkExecutor(
         api_url=api_url,
         api_token=api_token,
         timeout=args.timeout,
         strategy=strategy,
     )
+
+    compare = getattr(args, "compare", None)
+    if compare:
+        # Compare mode: seed once, evaluate with both strategies on same data
+        strat_a, strat_b = compare
+        print(f"Compare mode: {strat_a} vs {strat_b} (same data)\n")
+        try:
+            results_a: dict[str, float] = {}
+            results_b: dict[str, float] = {}
+            for scenario in dataset.scenarios:
+                sid = scenario.scenario_id
+                print(f"  {sid}: seeding...", end=" ", flush=True)
+                user_id = executor.setup(scenario)
+                print("evaluating...", end=" ", flush=True)
+
+                exec_a = executor.evaluate(scenario, user_id, strat_a)
+                sc_a = score_scenario(scenario, exec_a).total_score
+
+                exec_b = executor.evaluate(scenario, user_id, strat_b)
+                sc_b = score_scenario(scenario, exec_b).total_score
+
+                results_a[sid] = sc_a
+                results_b[sid] = sc_b
+                delta = sc_b - sc_a
+                print(f"{strat_a}={sc_a:.1f}  {strat_b}={sc_b:.1f}  delta={delta:+.1f}")
+
+            avg_a = sum(results_a.values()) / len(results_a) if results_a else 0
+            avg_b = sum(results_b.values()) / len(results_b) if results_b else 0
+            print(f"\n  Average: {strat_a}={avg_a:.1f}  {strat_b}={avg_b:.1f}  delta={avg_b - avg_a:+.1f}")
+        finally:
+            executor.close()
+        return
+
     try:
         executions = {}
         for scenario in dataset.scenarios:
@@ -400,6 +457,24 @@ def main() -> None:
         "--validate-only",
         action="store_true",
         help="Only validate the dataset file, don't run",
+    )
+    p.add_argument(
+        "--grid-search",
+        action="store_true",
+        help="Run grid search over activation params (requires --strategy activation:v1)",
+    )
+    p.add_argument(
+        "--grid",
+        choices=["fast", "full"],
+        default="fast",
+        dest="grid_level",
+        help="Grid search level: fast (~4 combos, ~10min) or full (~48 combos, ~2h)",
+    )
+    p.add_argument(
+        "--compare",
+        nargs=2,
+        metavar="STRATEGY",
+        help="Compare two strategies on same data (e.g. --compare vector:v1 activation:v1)",
     )
 
     args = parser.parse_args()

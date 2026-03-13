@@ -212,7 +212,7 @@ class TestEntityAnchoredRetrieval:
         retriever = ActivationRetriever(store)
 
         entity_nids, memory_ids = retriever._entity_recall("user1", "hello world")
-        assert entity_nids == set()
+        assert entity_nids == {}
         assert memory_ids == set()
         store.find_entity_by_name.assert_not_called()
 
@@ -227,7 +227,7 @@ class TestEntityAnchoredRetrieval:
 
         store.find_entity_by_name.return_value = None
         entity_nids, memory_ids = retriever._entity_recall("user1", "上海的面条")
-        assert entity_nids == set()
+        assert entity_nids == {}
         assert memory_ids == set()
 
     def test_entity_node_id_equals_entity_id(self):

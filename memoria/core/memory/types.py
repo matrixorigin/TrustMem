@@ -76,6 +76,7 @@ class Memory:
     source_event_ids: list[str] = field(default_factory=list)
     superseded_by: Optional[str] = None
     is_active: bool = True
+    access_count: int = 0
     session_id: Optional[str] = None
     observed_at: Optional[datetime] = None
     created_at: Optional[datetime] = None

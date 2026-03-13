@@ -55,6 +55,9 @@ services:
       # Rate limits — override for testing: MEMORIA_RATE_LIMIT_AUTH_KEYS=1000,60
       - MEMORIA_RATE_LIMIT_AUTH_KEYS=${MEMORIA_RATE_LIMIT_AUTH_KEYS:-20,60}
       - MEMORIA_RATE_LIMIT_DEFAULT=${MEMORIA_RATE_LIMIT_DEFAULT:-1000,60}
+      - MEMORIA_LLM_API_KEY=${MEMORIA_LLM_API_KEY:-}
+      - MEMORIA_LLM_BASE_URL=${MEMORIA_LLM_BASE_URL:-}
+      - MEMORIA_LLM_MODEL=${MEMORIA_LLM_MODEL:-gpt-4o-mini}
     depends_on:
       matrixone:
         condition: service_healthy

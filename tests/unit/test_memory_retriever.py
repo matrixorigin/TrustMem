@@ -43,6 +43,7 @@ def _mem_row(
     r.trust_tier = trust_tier
     r.relevance = relevance
     r.ft_score = ft_score
+    r.access_count = 0
     return r
 
 

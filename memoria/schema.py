@@ -160,6 +160,7 @@ def _ddl_statements(dim: int) -> list[str]:
           `embedding`          VECF32({dim}) DEFAULT NULL,
           `source_event_ids`   JSON         NOT NULL,
           `superseded_by`      VARCHAR(64)  DEFAULT NULL,
+          `access_count`       INT          NOT NULL DEFAULT 0,
           `is_active`          SMALLINT     NOT NULL DEFAULT 1,
           `observed_at`        DATETIME(6)  NOT NULL,
           `created_at`         DATETIME(6)  NOT NULL,

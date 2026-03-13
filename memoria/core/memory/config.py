@@ -81,6 +81,20 @@ class MemoryGovernanceConfig:
     entity_boost: float = 1.8
     entity_node_type_weight: float = 0.8
 
+    # ── Activation retrieval tuning ──
+    activation_lambda_semantic: float = 0.35
+    activation_lambda_activation: float = 0.35
+    activation_lambda_confidence: float = 0.20
+    activation_lambda_importance: float = 0.10
+    activation_decay_rate: float = 0.5
+    activation_spreading_factor: float = 0.8
+    activation_inhibition_beta: float = 0.15
+    activation_inhibition_top_m: int = 7
+    activation_sigmoid_gamma: float = 5.0
+    activation_sigmoid_theta: float = 0.1
+    activation_entity_link_multiplier: float = 1.8
+    activation_association_threshold: float = 0.55
+
     # ── Distributed: run_daily_all sharding ──
     daily_batch_size: int = 2000
     shard_index: int = 0  # this worker's shard (0-based)

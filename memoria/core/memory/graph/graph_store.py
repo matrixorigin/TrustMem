@@ -754,11 +754,17 @@ class GraphStore(DbConsumer):
 
     @staticmethod
     def _upsert_entity_in(
-        db: Session, user_id: str, name: str, display_name: str, entity_type: str
+        db: Session, user_id: str, name: str, display_name: str, entity_type: str,
+        embedding: list[float] | None = None,
     ) -> str:
+        # Exact name match only — soft dedup happens at retrieval time via find_entities_soft
         existing = db.query(Entity).filter_by(user_id=user_id, name=name).first()
         if existing:
+            if embedding and existing.embedding is None:
+                existing.embedding = embedding
+                db.flush()
             return existing.entity_id
+
         entity_id = _new_id()
         db.add(
             Entity(
@@ -767,6 +773,7 @@ class GraphStore(DbConsumer):
                 name=name,
                 display_name=display_name,
                 entity_type=entity_type,
+                embedding=embedding,
             )
         )
         db.flush()
@@ -848,12 +855,42 @@ class GraphStore(DbConsumer):
             return [(r[0], float(r[1])) for r in rows]
 
     def find_entity_by_name(self, user_id: str, name: str) -> str | None:
-        """Find entity_id in mem_entities by exact name match."""
+        """Find entity_id by exact name match."""
         with self._db() as db:
             row = (
-                db.query(Entity.entity_id).filter_by(user_id=user_id, name=name).first()
+                db.query(Entity.entity_id)
+                .filter_by(user_id=user_id, name=name)
+                .first()
             )
             return row[0] if row else None
+
+    # Entity types excluded from activation retrieval (kept as metadata only)
+    _NO_ACTIVATION_ENTITY_TYPES = {"time", "person"}
+
+    def find_entities_soft(
+        self, user_id: str, embedding: list[float], top_k: int = 5, threshold: float = 1.0,
+    ) -> list[tuple[str, float]]:
+        """Soft entity linking via embedding similarity.
+
+        Returns [(entity_id, similarity_score)] sorted by relevance.
+        Score is 1/(1+l2_dist), so higher = more similar.
+        Excludes time/person entities from activation.
+        """
+        from matrixone.sqlalchemy_ext import l2_distance
+
+        dist = l2_distance(Entity.embedding, embedding)
+        with self._db() as db:
+            rows = (
+                db.query(Entity.entity_id, dist.label("dist"))
+                .filter(Entity.user_id == user_id)
+                .filter(Entity.embedding.isnot(None))
+                .filter(~Entity.entity_type.in_(self._NO_ACTIVATION_ENTITY_TYPES))
+                .filter(dist < threshold)
+                .order_by(dist)
+                .limit(top_k)
+                .all()
+            )
+            return [(r.entity_id, 1.0 / (1.0 + float(r.dist))) for r in rows]
 
     def get_user_entities(self, user_id: str) -> list[tuple[str, str, str]]:
         """List all entities for a user. Returns [(entity_id, name, entity_type)]."""

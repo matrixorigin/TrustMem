@@ -9,14 +9,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from memoria.core.memory.graph.entity_extractor import (
-    extract_entities_lightweight,
-)
+from memoria.core.memory.graph.ner import get_ner_backend
 from memoria.core.memory.graph.graph_store import GraphStore, _new_id
 from memoria.core.memory.graph.types import EdgeType, GraphNodeData, NodeType
 from memoria.core.memory.types import TrustTier
 
 if TYPE_CHECKING:
+    from memoria.core.memory.config import MemoryGovernanceConfig
     from memoria.core.memory.types import Memory
 
 logger = logging.getLogger(__name__)
@@ -56,8 +55,20 @@ def _compute_ingest_importance(
 class GraphBuilder:
     """Builds graph structure from memories and events."""
 
-    def __init__(self, store: GraphStore) -> None:
+    def __init__(
+        self,
+        store: GraphStore,
+        *,
+        config: MemoryGovernanceConfig | None = None,
+        embed_fn: Any | None = None,
+    ) -> None:
         self._store = store
+        self._embed_fn = embed_fn
+        if config is None:
+            from memoria.core.memory.config import DEFAULT_CONFIG
+
+            config = DEFAULT_CONFIG
+        self._assoc_threshold = config.activation_association_threshold
 
     def ingest(
         self,
@@ -115,7 +126,7 @@ class GraphBuilder:
             for candidate, cos_sim in similar:
                 if candidate.node_id == node.node_id:
                     continue
-                if cos_sim > 0.3:
+                if cos_sim > self._assoc_threshold:
                     pending_edges.append(
                         (
                             node.node_id,
@@ -312,18 +323,28 @@ class GraphBuilder:
         if not content_nodes:
             return []
 
-        _WEIGHT = {"regex": 0.8, "llm": 0.9, "manual": 1.0}
-        weight = _WEIGHT.get("regex", 0.8)
+        # Entity link weight by extraction source — higher = more confident
+        _ENTITY_WEIGHT: dict[str, float] = {
+            "person": 1.0,   # @mention or Chinese name — high confidence
+            "tech": 0.9,     # capitalized word or known term
+            "project": 0.85, # CamelCase or service-name pattern
+            "repo": 0.95,    # owner/repo pattern — very specific
+            "org": 0.8,
+            "location": 0.7,
+            "time": 0.6,
+            "concept": 0.7,
+        }
 
-        # Build {node_id: [(canonical_name, entity_type), ...]}
-        entities_per_node: dict[str, list[tuple[str, str]]] = {}
+        # Build {node_id: [(canonical_name, entity_type, weight), ...]}
+        entities_per_node: dict[str, list[tuple[str, str, float]]] = {}
         for node in content_nodes:
             if not node.content:
                 continue
-            entities = extract_entities_lightweight(node.content)
+            entities = get_ner_backend().extract(node.content)
             if entities:
                 entities_per_node[node.node_id] = [
-                    (ent.name, ent.entity_type) for ent in entities
+                    (ent.name, ent.entity_type, _ENTITY_WEIGHT.get(ent.entity_type, 0.8))
+                    for ent in entities
                 ]
 
         if not entities_per_node:
@@ -333,24 +354,41 @@ class GraphBuilder:
         entity_id_cache: dict[str, str] = {}
         created: list[GraphNodeData] = []
 
+        # Batch-embed entity names for soft dedup
+        all_entity_names: list[str] = []
+        for ent_list in entities_per_node.values():
+            for canonical_name, _etype, _w in ent_list:
+                if canonical_name not in entity_id_cache:
+                    all_entity_names.append(canonical_name)
+        entity_embeddings: dict[str, list[float]] = {}
+        if all_entity_names and self._embed_fn:
+            try:
+                for n in all_entity_names:
+                    vec = self._embed_fn(n)
+                    if vec:
+                        entity_embeddings[n] = vec
+            except Exception:
+                pass  # fall back to no-embedding upsert
+
         with self._store._db() as db:
             # 1. Upsert mem_entities
             for node in content_nodes:
-                for canonical_name, etype in entities_per_node.get(node.node_id, []):
+                for canonical_name, etype, _w in entities_per_node.get(node.node_id, []):
                     if canonical_name not in entity_id_cache:
                         entity_id_cache[canonical_name] = self._store._upsert_entity_in(
-                            db, user_id, canonical_name, canonical_name, etype
+                            db, user_id, canonical_name, canonical_name, etype,
+                            embedding=entity_embeddings.get(canonical_name),
                         )
 
             # 2. Write mem_memory_entity_links (semantic nodes only)
             for node in content_nodes:
                 if not node.memory_id:
                     continue
-                for canonical_name, _etype in entities_per_node.get(node.node_id, []):
+                for canonical_name, _etype, w in entities_per_node.get(node.node_id, []):
                     entity_id = entity_id_cache.get(canonical_name)
                     if entity_id:
                         self._store._upsert_link_in(
-                            db, node.memory_id, entity_id, user_id, "regex", weight
+                            db, node.memory_id, entity_id, user_id, "regex", w
                         )
 
             # 3. Ensure graph entity nodes exist (entity_id == node_id)
@@ -358,7 +396,7 @@ class GraphBuilder:
 
             seen: set[str] = set()
             for ent_list in entities_per_node.values():
-                for canonical_name, etype in ent_list:
+                for canonical_name, etype, _w in ent_list:
                     eid = entity_id_cache.get(canonical_name)
                     if not eid or eid in seen:
                         continue
@@ -382,13 +420,20 @@ class GraphBuilder:
 
             db.commit()
 
+        # Entity types that should NOT participate in graph activation.
+        # time: creates spurious chains (周一↔周二↔周三)
+        # person: too generic as activation anchors, kept as metadata only
+        _NO_GRAPH_EDGE_TYPES = {"time", "person"}
+
         # 4. Collect graph edges (all content nodes, including episodic)
         for node in content_nodes:
-            for canonical_name, _etype in entities_per_node.get(node.node_id, []):
+            for canonical_name, etype, w in entities_per_node.get(node.node_id, []):
+                if etype in _NO_GRAPH_EDGE_TYPES:
+                    continue
                 ent_node_id = entity_id_cache.get(canonical_name)
                 if ent_node_id:
                     pending_edges.append(
-                        (node.node_id, ent_node_id, EdgeType.ENTITY_LINK.value, weight)
+                        (node.node_id, ent_node_id, EdgeType.ENTITY_LINK.value, w)
                     )
 
         return created
