@@ -14,16 +14,17 @@ from typing import TYPE_CHECKING
 from memoria.core.memory.graph.types import EDGE_TYPE_MULTIPLIER, Edge
 
 if TYPE_CHECKING:
+    from memoria.core.memory.config import MemoryGovernanceConfig
     from memoria.core.memory.graph.graph_store import GraphStore
 
-# ── Algorithm hyperparameters ─────────────────────────────────────────
+# ── Default hyperparameters (overridden by config when provided) ──────
 
-DECAY_RATE = 0.5  # δ: retention decay per iteration
-SPREADING_FACTOR = 0.8  # S: how much activation spreads to neighbors
-INHIBITION_BETA = 0.15  # β: lateral inhibition strength
-INHIBITION_TOP_M = 7  # M: number of top nodes for inhibition
-SIGMOID_GAMMA = 5.0  # γ: sigmoid steepness
-SIGMOID_THETA = 0.1  # θ: sigmoid threshold
+DECAY_RATE = 0.5
+SPREADING_FACTOR = 0.8
+INHIBITION_BETA = 0.15
+INHIBITION_TOP_M = 7
+SIGMOID_GAMMA = 5.0
+SIGMOID_THETA = 0.1
 NUM_ITERATIONS = 3
 
 # §13.1 Task-type edge boosts — applied on top of EDGE_TYPE_MULTIPLIER
@@ -34,40 +35,53 @@ TASK_EDGE_BOOST: dict[str, dict[str, float]] = {
 }
 
 
-def _sigmoid(x: float) -> float:
-    z = SIGMOID_GAMMA * (x - SIGMOID_THETA)
-    if z < -20:
-        return 0.0
-    if z > 20:
-        return 1.0
-    return 1.0 / (1.0 + math.exp(-z))
-
-
-def _edge_weight(edge: Edge, task_boost: dict[str, float] | None = None) -> float:
-    # edge.weight carries per-edge quality (e.g. entity_link: regex=0.8, llm=0.9, manual=1.0).
-    # EDGE_TYPE_MULTIPLIER is the base multiplier per edge type.
-    base = edge.weight * EDGE_TYPE_MULTIPLIER.get(edge.edge_type, 1.0)
+def _edge_weight(
+    edge: Edge,
+    task_boost: dict[str, float] | None = None,
+    type_override: dict[str, float] | None = None,
+) -> float:
+    mult = EDGE_TYPE_MULTIPLIER.get(edge.edge_type, 1.0)
+    if type_override and edge.edge_type in type_override:
+        mult = type_override[edge.edge_type]
+    base = edge.weight * mult
     if task_boost:
         base *= task_boost.get(edge.edge_type, 1.0)
     return base
 
 
 class SpreadingActivation:
-    """DB-backed spreading activation.
+    """DB-backed spreading activation with configurable hyperparameters."""
 
-    Each iteration:
-    1. Fetch incoming edges for all active nodes (single DB query)
-    2. Compute raw activation from neighbors
-    3. Lateral inhibition + sigmoid
-
-    Total DB queries = NUM_ITERATIONS (3), regardless of graph size.
-    """
-
-    def __init__(self, store: GraphStore, *, task_type: str | None = None) -> None:
+    def __init__(
+        self,
+        store: GraphStore,
+        *,
+        task_type: str | None = None,
+        config: MemoryGovernanceConfig | None = None,
+    ) -> None:
         self._store = store
         self._activation: dict[str, float] = {}
         self._out_degree: dict[str, int] = {}
         self._task_boost = TASK_EDGE_BOOST.get(task_type, None) if task_type else None
+        # Load params from config or use module defaults
+        if config is not None:
+            self._decay = config.activation_decay_rate
+            self._spread = config.activation_spreading_factor
+            self._beta = config.activation_inhibition_beta
+            self._top_m = config.activation_inhibition_top_m
+            self._gamma = config.activation_sigmoid_gamma
+            self._theta = config.activation_sigmoid_theta
+            self._type_override: dict[str, float] = {
+                "entity_link": config.activation_entity_link_multiplier,
+            }
+        else:
+            self._decay = DECAY_RATE
+            self._spread = SPREADING_FACTOR
+            self._beta = INHIBITION_BETA
+            self._top_m = INHIBITION_TOP_M
+            self._gamma = SIGMOID_GAMMA
+            self._theta = SIGMOID_THETA
+            self._type_override = {}
 
     def set_anchors(self, anchors: dict[str, float]) -> None:
         self._activation = dict(anchors)
@@ -82,39 +96,31 @@ class SpreadingActivation:
         return {nid: a for nid, a in self._activation.items() if a >= min_activation}
 
     def _propagation_step(self) -> None:
-        """One iteration: fetch edges → spread → inhibit → sigmoid.
-
-        DB queries per iteration: 1 (bidirectional) + 0-1 (fan-out cache miss).
-        """
+        """One iteration: fetch edges → spread → inhibit → sigmoid."""
         active_ids = set(self._activation.keys())
         if not active_ids:
             return
 
-        # Single DB query: incoming + outgoing for all active nodes
         incoming, outgoing = self._store.get_edges_bidirectional(active_ids)
 
-        # Collect contributor IDs for fan-out normalization
         contributor_ids: set[str] = set()
         for edges in incoming.values():
             for e in edges:
                 contributor_ids.add(e.target_id)
 
-        # Fan-out cache: only fetch uncached contributors (0-1 DB query)
         uncached = contributor_ids - set(self._out_degree.keys())
         if uncached:
             out_edges = self._store.get_edges_for_nodes(uncached)
             for nid, edges in out_edges.items():
                 self._out_degree[nid] = max(len(edges), 1)
-        # Also cache fan-out for active nodes from the outgoing we already have
         for nid, edges in outgoing.items():
             if nid not in self._out_degree:
                 self._out_degree[nid] = max(len(edges), 1)
 
-        # Compute raw activation
         raw: dict[str, float] = {}
 
         for nid in active_ids:
-            retention = (1 - DECAY_RATE) * self._activation.get(nid, 0.0)
+            retention = (1 - self._decay) * self._activation.get(nid, 0.0)
             spread = 0.0
             for edge in incoming.get(nid, []):
                 neighbor_id = edge.target_id
@@ -123,14 +129,13 @@ class SpreadingActivation:
                     continue
                 fan = self._out_degree.get(neighbor_id, 1)
                 spread += (
-                    SPREADING_FACTOR
-                    * _edge_weight(edge, self._task_boost)
+                    self._spread
+                    * _edge_weight(edge, self._task_boost, self._type_override)
                     * neighbor_act
                     / fan
                 )
             raw[nid] = retention + spread
 
-        # Activate newly reached neighbors (from outgoing, already fetched)
         for nid in active_ids:
             for edge in outgoing.get(nid, []):
                 tid = edge.target_id
@@ -139,33 +144,39 @@ class SpreadingActivation:
                     if neighbor_act > 0:
                         fan = self._out_degree.get(nid, 1)
                         spread_val = (
-                            SPREADING_FACTOR
-                            * _edge_weight(edge, self._task_boost)
+                            self._spread
+                            * _edge_weight(edge, self._task_boost, self._type_override)
                             * neighbor_act
                             / fan
                         )
                         raw[tid] = spread_val
 
-        # Lateral inhibition
         inhibited = self._lateral_inhibition(raw)
 
-        # Sigmoid + update
         self._activation = {}
         for nid, val in inhibited.items():
-            s = _sigmoid(val)
+            s = self._sigmoid(val)
             if s > 0.01:
                 self._activation[nid] = s
 
-    @staticmethod
-    def _lateral_inhibition(raw: dict[str, float]) -> dict[str, float]:
+    def _sigmoid(self, x: float) -> float:
+        z = self._gamma * (x - self._theta)
+        if z < -20:
+            return 0.0
+        if z > 20:
+            return 1.0
+        return 1.0 / (1.0 + math.exp(-z))
+
+    def _lateral_inhibition(self, raw: dict[str, float]) -> dict[str, float]:
         if not raw:
             return raw
+        top_m = min(self._top_m, max(len(raw) // 3, 1))
         sorted_items = sorted(raw.items(), key=lambda x: x[1], reverse=True)
-        top_m_values = [v for _, v in sorted_items[:INHIBITION_TOP_M]]
+        top_m_values = [v for _, v in sorted_items[:top_m]]
         result: dict[str, float] = {}
         for nid, val in raw.items():
             inhibition = sum(
-                INHIBITION_BETA * (top_val - val)
+                self._beta * (top_val - val)
                 for top_val in top_m_values
                 if top_val > val
             )

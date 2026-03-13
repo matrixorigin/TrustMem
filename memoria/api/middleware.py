@@ -114,7 +114,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not auth.startswith("Bearer "):
             return await call_next(request)
 
-        api_key = auth[7:]  # Use raw key as identity (hashed in prod)
+        api_key = auth[7:]
+
+        # Master key is exempt from rate limiting (used by admin/benchmark)
+        from memoria.api.dependencies import _is_master_key
+
+        if _is_master_key(api_key):
+            return await call_next(request)
+
         key_id = api_key[:12]  # prefix only, don't store full key
 
         method = request.method

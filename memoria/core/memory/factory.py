@@ -73,6 +73,7 @@ def _register_builtins() -> None:
         db_factory: DbFactory,
         params: dict | None = None,
         config: Any = None,
+        embed_fn: Any = None,
         **kw: Any,
     ) -> Any:
         from memoria.core.memory.strategy.activation_index import ActivationIndexManager
@@ -81,6 +82,7 @@ def _register_builtins() -> None:
             db_factory,
             params=params,
             config=config,
+            embed_fn=embed_fn,
         )
 
     _registry.register("vector:v1", _vector_factory)
@@ -103,8 +105,8 @@ def _resolve_strategy(
     user_id: str | None,
     backend: str | None,
     strategy: str | None,
-) -> str:
-    """Resolve strategy key.
+) -> tuple[str, dict | None]:
+    """Resolve strategy key and per-user param overrides.
 
     Resolution order (§4.2):
     1. Explicit strategy parameter
@@ -112,45 +114,52 @@ def _resolve_strategy(
     3. Per-user DB row (mem_user_memory_config)
     4. MEM_RETRIEVAL_STRATEGY env var
     5. "vector:v1" hardcoded fallback
+
+    Returns (strategy_key, user_params_or_None).
     """
     if strategy:
-        return strategy
+        return strategy, None
     if backend:
         mapped = _BACKEND_TO_STRATEGY.get(backend)
         if mapped:
-            return mapped
-        return backend
+            return mapped, None
+        return backend, None
     if user_id and db_factory:
-        db_key = _lookup_user_strategy(db_factory, user_id)
+        db_key, user_params = _lookup_user_strategy(db_factory, user_id)
         if db_key:
-            return db_key
-    return os.environ.get("MEM_RETRIEVAL_STRATEGY", "activation:v1")
+            return db_key, user_params
+    return os.environ.get("MEM_RETRIEVAL_STRATEGY", "activation:v1"), None
 
 
-def _lookup_user_strategy(db_factory: DbFactory, user_id: str) -> str | None:
-    """Look up per-user strategy from mem_user_memory_config."""
+def _lookup_user_strategy(
+    db_factory: DbFactory, user_id: str
+) -> tuple[str | None, dict | None]:
+    """Look up per-user strategy and param overrides from mem_user_memory_config."""
     from sqlalchemy import text
 
     try:
         with db_factory() as db:
             row = db.execute(
                 text(
-                    "SELECT strategy_key, index_status "
+                    "SELECT strategy_key, index_status, params_json "
                     "FROM mem_user_memory_config "
                     "WHERE user_id = :uid"
                 ),
                 {"uid": user_id},
             ).fetchone()
             if row is None:
-                return None
-            # If index is still building, fall through to env/default
+                return None, None
             if row.index_status == "backfilling":  # type: ignore[union-attr]
-                return None
+                return None, None
             key = row.strategy_key  # type: ignore[union-attr]
-            return key if isinstance(key, str) else None
+            params_json = row.params_json  # type: ignore[union-attr]
+            user_params = None
+            if params_json and isinstance(params_json, dict):
+                user_params = params_json
+            return (key if isinstance(key, str) else None), user_params
     except Exception:
         logger.debug("Failed to look up user strategy for %s", user_id, exc_info=True)
-        return None
+        return None, None
 
 
 def create_memory_service(
@@ -179,12 +188,28 @@ def create_memory_service(
     Returns:
         MemoryService with canonical storage + selected retrieval strategy.
     """
-    strategy_key = _resolve_strategy(db_factory, user_id, backend, strategy)
+    strategy_key, user_params = _resolve_strategy(
+        db_factory, user_id, backend, strategy
+    )
 
     if config is None:
         from memoria.core.memory.config import DEFAULT_CONFIG
 
         config = DEFAULT_CONFIG
+
+    # Apply per-user param overrides (from mem_user_memory_config.params_json)
+    if user_params:
+        from dataclasses import fields as dc_fields
+
+        overrides = {}
+        valid_fields = {f.name for f in dc_fields(config)}
+        for k, v in user_params.items():
+            if k in valid_fields:
+                overrides[k] = type(getattr(config, k))(v)
+        if overrides:
+            from dataclasses import replace
+
+            config = replace(config, **overrides)
 
     from memoria.core.memory.tabular.metrics import MemoryMetrics
 
@@ -211,6 +236,7 @@ def create_memory_service(
         descriptor,
         db_factory=db_factory,
         config=config,
+        embed_fn=embed_fn,
     )
 
     return MemoryService(
@@ -260,7 +286,7 @@ def create_editor(
 
     index_manager = None
     if user_id:
-        strategy_key = _resolve_strategy(
+        strategy_key, _user_params = _resolve_strategy(
             db_factory, user_id, backend=None, strategy=None
         )
         descriptor = StrategyDescriptor.parse(strategy_key)

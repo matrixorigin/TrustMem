@@ -49,7 +49,7 @@ def store(db_factory):
 
 @pytest.fixture
 def builder(store):
-    return GraphBuilder(store)
+    return GraphBuilder(store, embed_fn=lambda x: _embed())
 
 
 @pytest.fixture

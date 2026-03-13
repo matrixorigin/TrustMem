@@ -7,7 +7,6 @@ import pytest
 from memoria.core.memory.graph.activation import (
     SIGMOID_THETA,
     SpreadingActivation,
-    _sigmoid,
 )
 from memoria.core.memory.graph.retriever import (
     ActivationRetriever,
@@ -16,19 +15,25 @@ from memoria.core.memory.graph.retriever import (
 from memoria.core.memory.graph.types import Edge, GraphNodeData, NodeType
 
 
+def _sigmoid_default(x: float) -> float:
+    """Sigmoid with default params for testing."""
+    sa = SpreadingActivation(MagicMock())
+    return sa._sigmoid(x)
+
+
 class TestSigmoid:
     def test_at_threshold(self):
-        assert _sigmoid(SIGMOID_THETA) == pytest.approx(0.5)
+        assert _sigmoid_default(SIGMOID_THETA) == pytest.approx(0.5)
 
     def test_high_input(self):
-        assert _sigmoid(1.0) > 0.95
+        assert _sigmoid_default(1.0) > 0.95
 
     def test_low_input(self):
-        assert _sigmoid(-1.0) < 0.05
+        assert _sigmoid_default(-1.0) < 0.05
 
     def test_clamp_extremes(self):
-        assert _sigmoid(100.0) == 1.0
-        assert _sigmoid(-100.0) == 0.0
+        assert _sigmoid_default(100.0) == 1.0
+        assert _sigmoid_default(-100.0) == 0.0
 
 
 class TestSpreadingActivation:

@@ -124,21 +124,89 @@ def delete_user(
     return {"status": "ok", "user_id": user_id}
 
 
+@router.post("/admin/users/{user_id}/reset-access-counts")
+def reset_access_counts(
+    user_id: str,
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db_session),
+):
+    """Reset access_count to 0 for all memories of a user. Used by benchmark before evaluation."""
+    from memoria.core.memory.models.memory import MemoryRecord as M
+
+    db.query(M).filter_by(user_id=user_id).update({"access_count": 0})
+    db.commit()
+    return {"user_id": user_id, "status": "ok"}
+
+
+@router.post("/admin/users/{user_id}/strategy")
+def set_strategy(
+    user_id: str,
+    strategy: str = "vector:v1",
+    _admin: str = Depends(require_admin),
+):
+    """Set retrieval strategy for a user. Used by benchmark to compare strategies."""
+    from memoria.api.database import get_db_factory
+    from memoria.core.memory.factory import switch_user_strategy
+
+    result = switch_user_strategy(get_db_factory(), user_id, strategy)
+    return {
+        "user_id": user_id,
+        "strategy": result.strategy_key,
+        "previous": result.previous_key,
+        "status": result.status,
+    }
+
+
+@router.post("/admin/users/{user_id}/params")
+def set_user_params(
+    user_id: str,
+    params: dict,
+    _admin: str = Depends(require_admin),
+):
+    """Set per-user activation param overrides (stored in params_json)."""
+    import json
+
+    from sqlalchemy import text
+
+    from memoria.api.database import get_db_factory
+
+    db_factory = get_db_factory()
+    with db_factory() as db:
+        db.execute(
+            text(
+                "UPDATE mem_user_memory_config SET params_json = :pj, updated_at = NOW() "
+                "WHERE user_id = :uid"
+            ),
+            {"uid": user_id, "pj": json.dumps(params)},
+        )
+        db.commit()
+    return {"user_id": user_id, "params": params}
+
+
 @router.post("/admin/governance/{user_id}/trigger")
 def admin_trigger_governance(
     user_id: str,
     op: str = "governance",
     _admin: str = Depends(require_admin),
 ):
-    """Admin triggers governance/consolidate/reflect for a user (sync, skips cooldown).
+    """Admin triggers governance/consolidate/reflect/extract_entities for a user.
 
-    TODO: v2 — Redis queue + async worker for distributed deployment.
+    Runs synchronously, skips all cooldowns.
+    Used by benchmark executor for maturation phase.
     """
-    if op not in ("governance", "consolidate", "reflect"):
+    valid_ops = (
+        "governance",
+        "consolidate",
+        "reflect",
+        "extract_entities",
+        "extract_entities_llm",
+    )
+    if op not in valid_ops:
         from fastapi import HTTPException
 
         raise HTTPException(
-            status_code=400, detail="Invalid op. Must be governance/consolidate/reflect"
+            status_code=400,
+            detail=f"Invalid op. Must be one of: {', '.join(valid_ops)}",
         )
 
     from memoria.api.database import get_db_factory
@@ -154,15 +222,123 @@ def admin_trigger_governance(
             "user_id": user_id,
             "result": {"quarantined": r.quarantined, "cleaned_stale": r.cleaned_stale},
         }
-    else:
-        from memoria.core.memory.factory import create_memory_service
 
-        svc = create_memory_service(db_factory, user_id=user_id)
-        result = svc.consolidate(user_id) if op == "consolidate" else None
-        if op == "reflect":
-            return {
-                "op": op,
-                "user_id": user_id,
-                "result": "reflect requires LLM — use user endpoint",
-            }
+    if op == "extract_entities":
+        from memoria.core.memory.strategy.activation_index import ActivationIndexManager
+
+        mgr = ActivationIndexManager(db_factory)
+        result = mgr.backfill(user_id)
+        return {
+            "op": op,
+            "user_id": user_id,
+            "result": {
+                "processed": result.processed,
+                "skipped": result.skipped,
+                "errors": result.errors[:10],
+            },
+        }
+
+    if op == "extract_entities_llm":
+        from memoria.core.llm import get_llm_client
+        from memoria.core.memory.graph.entity_extractor import (
+            extract_entities_lightweight,
+            extract_entities_llm,
+            normalize_entity_name,
+        )
+        from memoria.core.memory.strategy.activation_index import ActivationIndexManager
+        from memoria.core.memory.graph.graph_store import GraphStore
+
+        llm = get_llm_client()
+
+        # Backfill using LLM NER (LLM results merged with regex)
+        from memoria.core.memory.tabular.store import MemoryStore
+
+        store = GraphStore(db_factory)
+        mem_store = MemoryStore(db_factory)
+        memories = mem_store.list_active(user_id, load_embedding=True)
+
+        processed = skipped = 0
+        errors: list[str] = []
+        for mem in memories:
+            try:
+                # LLM extraction merged with regex
+                seen: set[str] = set()
+                entities = []
+                for e in extract_entities_llm(mem.content, llm):
+                    key = normalize_entity_name(e.name)
+                    if key not in seen and len(key) >= 2:
+                        seen.add(key)
+                        entities.append(e)
+                for e in extract_entities_lightweight(mem.content):
+                    key = normalize_entity_name(e.name)
+                    if key not in seen and len(key) >= 2:
+                        seen.add(key)
+                        entities.append(e)
+
+                if not entities:
+                    skipped += 1
+                    continue
+                # Get or create graph node for this memory
+                node = store.get_node_by_memory_id(mem.memory_id)
+                if node:
+                    pending_edges: list = []
+                    # Re-run entity linking with LLM entities
+                    from memoria.core.memory.graph.types import EdgeType
+
+                    entity_id_cache: dict[str, str] = {}
+                    with store._db() as db:
+                        for ent in entities:
+                            if ent.name not in entity_id_cache:
+                                entity_id_cache[ent.name] = store._upsert_entity_in(
+                                    db,
+                                    user_id,
+                                    ent.name,
+                                    ent.display_name,
+                                    ent.entity_type,
+                                )
+                        if mem.memory_id:
+                            for ent in entities:
+                                eid = entity_id_cache.get(ent.name)
+                                if eid:
+                                    store._upsert_link_in(
+                                        db, mem.memory_id, eid, user_id, "llm", 0.9
+                                    )
+                        db.commit()
+                    # Add graph edges
+                    for ent in entities:
+                        eid = entity_id_cache.get(ent.name)
+                        if eid:
+                            pending_edges.append(
+                                (node.node_id, eid, EdgeType.ENTITY_LINK.value, 0.9)
+                            )
+                    if pending_edges:
+                        store.add_edges_batch(pending_edges, user_id)
+                    processed += 1
+                else:
+                    skipped += 1
+            except Exception as e:
+                errors.append(f"{mem.memory_id}: {e}")
+
+        return {
+            "op": op,
+            "user_id": user_id,
+            "result": {
+                "processed": processed,
+                "skipped": skipped,
+                "errors": errors[:10],
+            },
+        }
+
+    from memoria.core.memory.factory import create_memory_service
+
+    svc = create_memory_service(db_factory, user_id=user_id)
+    if op == "consolidate":
+        result = svc.consolidate(user_id)
         return {"op": op, "user_id": user_id, "result": result}
+
+    # reflect
+    return {
+        "op": op,
+        "user_id": user_id,
+        "result": "reflect requires LLM — use user endpoint",
+    }

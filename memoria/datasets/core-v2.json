@@ -1,0 +1,417 @@
+{
+  "dataset_id": "memoria-core-v2",
+  "version": "v1.0",
+  "description": "Extended core benchmark covering edge cases missed by v1: negation, numeric precision, deletion, implicit causality, high-noise recall, tool results, long-text summarization, and temporal ordering.",
+  "scenarios": [
+    {
+      "scenario_id": "CORE2-001",
+      "title": "Negation memory: 'do NOT use X'",
+      "description": "A memory explicitly forbids a technology. Query asks for recommendations — the forbidden item must be excluded.",
+      "domain": "engineering",
+      "difficulty": "L2",
+      "horizon": "short",
+      "tags": ["trust", "conflict"],
+      "seed_memories": [
+        {"content": "Do NOT use Moment.js for date handling — it is deprecated and adds 300KB to bundle size.", "memory_type": "profile"},
+        {"content": "Use date-fns or Day.js for date manipulation instead of Moment.js.", "memory_type": "profile"},
+        {"content": "Lodash is allowed but prefer native ES2022 methods where possible.", "memory_type": "profile"},
+        {"content": "Moment.js was the standard date library before 2023.", "memory_type": "semantic", "is_noise": true}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "What date library should I use?",
+          "top_k": 3,
+          "expected_contents": ["date-fns", "Day.js"],
+          "excluded_contents": ["Moment.js"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-002",
+      "title": "Exact version number recall",
+      "description": "Multiple version numbers exist for the same technology. The query must return the exact pinned version.",
+      "domain": "engineering",
+      "difficulty": "L2",
+      "horizon": "short",
+      "tags": ["trust"],
+      "seed_memories": [
+        {"content": "Node.js version is pinned to 20.11.0 LTS in .nvmrc and all Docker images.", "memory_type": "semantic"},
+        {"content": "Node.js 18.x is used in the legacy service that hasn't been migrated yet.", "memory_type": "semantic", "is_noise": true},
+        {"content": "Node.js 22 is available but not yet approved for production use.", "memory_type": "semantic", "is_noise": true},
+        {"content": "npm version is 10.2.4, matching the Node.js 20.11.0 LTS bundle.", "memory_type": "semantic"}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "What Node.js version are we using in production?",
+          "top_k": 3,
+          "expected_contents": ["20.11.0", ".nvmrc"],
+          "excluded_contents": ["18.x", "Node.js 22"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-003",
+      "title": "Memory deletion: purged fact must not appear",
+      "description": "After a memory is purged, it must not appear in retrieval results.",
+      "domain": "compliance",
+      "difficulty": "L2",
+      "horizon": "short",
+      "tags": ["trust", "drift"],
+      "seed_memories": [
+        {"content": "Internal API key for staging: sk-staging-abc123. Rotate every 90 days.", "memory_type": "semantic"},
+        {"content": "Production API keys are managed via AWS Secrets Manager, not stored in memory.", "memory_type": "semantic"},
+        {"content": "API key rotation schedule: staging monthly, production quarterly.", "memory_type": "semantic"}
+      ],
+      "steps": [
+        {
+          "action": "purge",
+          "topic": "sk-staging-abc123",
+          "reason": "Staging API key was compromised and must be removed from memory"
+        }
+      ],
+      "assertions": [
+        {
+          "query": "What is the staging API key?",
+          "top_k": 3,
+          "expected_contents": ["AWS Secrets Manager", "rotation"],
+          "excluded_contents": ["sk-staging-abc123"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-004",
+      "title": "High-noise recall: 1 signal in 8 distractors",
+      "description": "One highly specific fact is buried among 8 semantically similar but wrong memories.",
+      "domain": "engineering",
+      "difficulty": "L3",
+      "horizon": "short",
+      "tags": ["trust"],
+      "seed_memories": [
+        {"content": "The payment service timeout is set to 30 seconds.", "memory_type": "semantic", "is_noise": true},
+        {"content": "The auth service timeout is set to 10 seconds.", "memory_type": "semantic", "is_noise": true},
+        {"content": "The search service timeout is set to 5 seconds.", "memory_type": "semantic", "is_noise": true},
+        {"content": "The notification service timeout is set to 15 seconds.", "memory_type": "semantic", "is_noise": true},
+        {"content": "The email service timeout is set to 45 seconds.", "memory_type": "semantic", "is_noise": true},
+        {"content": "The analytics service timeout is set to 60 seconds.", "memory_type": "semantic", "is_noise": true},
+        {"content": "The export service timeout is set to 120 seconds for large reports.", "memory_type": "semantic", "is_noise": true},
+        {"content": "The billing service timeout is set to 8 seconds — must be fast for checkout flow.", "memory_type": "semantic"},
+        {"content": "All service timeouts are configured in config/timeouts.yaml.", "memory_type": "semantic"}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "What is the billing service timeout and why?",
+          "top_k": 3,
+          "expected_contents": ["billing service", "8 seconds", "checkout"],
+          "excluded_contents": ["payment service", "auth service", "120 seconds"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-005",
+      "title": "Implicit causality: symptom → root cause",
+      "description": "User asks about a symptom. The answer requires linking the symptom to its stored root cause.",
+      "domain": "engineering",
+      "difficulty": "L3",
+      "horizon": "medium",
+      "tags": ["trust", "interruption"],
+      "seed_memories": [
+        {"content": "Memory leak root cause: the event listener in UserSessionManager is never removed on logout.", "memory_type": "semantic"},
+        {"content": "Production alert: memory usage climbs 50MB per hour under normal load.", "memory_type": "working"},
+        {"content": "Temporary fix: restart the API server every 6 hours via cron job.", "memory_type": "working"},
+        {"content": "Permanent fix: add removeEventListener call in UserSessionManager.logout() method.", "memory_type": "semantic"},
+        {"content": "Unrelated: CPU usage is stable at 20% average.", "memory_type": "semantic", "is_noise": true}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "Why does memory usage keep increasing?",
+          "top_k": 3,
+          "expected_contents": ["event listener", "UserSessionManager", "never removed"],
+          "excluded_contents": ["CPU usage"]
+        },
+        {
+          "query": "How do we permanently fix the memory leak?",
+          "top_k": 3,
+          "expected_contents": ["removeEventListener", "logout"],
+          "excluded_contents": ["restart", "cron job"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-006",
+      "title": "Temporal ordering: most recent decision wins",
+      "description": "Multiple decisions about the same topic at different times. The latest must be returned.",
+      "domain": "engineering",
+      "difficulty": "L3",
+      "horizon": "long",
+      "tags": ["drift", "conflict"],
+      "seed_memories": [
+        {"content": "Jan 2026: Team decided to use gRPC for all inter-service communication.", "memory_type": "semantic"},
+        {"content": "Feb 2026: After performance testing, team reconsidered — REST is simpler for external APIs.", "memory_type": "semantic"},
+        {"content": "Mar 2026: Final decision: gRPC for internal services, REST+OpenAPI for external APIs.", "memory_type": "semantic"},
+        {"content": "gRPC requires HTTP/2 and protobuf, adding complexity to client SDKs.", "memory_type": "semantic", "is_noise": true}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "What communication protocol should we use for our services?",
+          "top_k": 3,
+          "expected_contents": ["gRPC for internal", "REST", "external APIs"],
+          "excluded_contents": []
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-007",
+      "title": "Tool result memory: cached command output",
+      "description": "A tool result was stored as memory. Query should retrieve the cached result, not re-run.",
+      "domain": "engineering",
+      "difficulty": "L2",
+      "horizon": "short",
+      "tags": ["trust"],
+      "seed_memories": [
+        {"content": "TOOL RESULT [git log --oneline -5]: a3f2c1d fix: resolve race condition in cache layer\nb8e4a2f feat: add Redis cluster support\nc1d3e5f refactor: extract auth middleware\nd2f4g6h fix: memory leak in session handler\ne3g5h7i chore: update dependencies", "memory_type": "tool_result"},
+        {"content": "TOOL RESULT [npm audit]: found 2 moderate vulnerabilities in lodash@4.17.20 and axios@0.21.1", "memory_type": "tool_result"},
+        {"content": "Current branch: feature/redis-cluster-support", "memory_type": "working"}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "What were the last few commits?",
+          "top_k": 3,
+          "expected_contents": ["race condition", "Redis cluster", "auth middleware"],
+          "excluded_contents": ["npm audit", "lodash"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-008",
+      "title": "Long-text memory: key fact buried in paragraph",
+      "description": "A critical fact is embedded in a long paragraph. Retrieval must surface the paragraph containing it.",
+      "domain": "legal",
+      "difficulty": "L3",
+      "horizon": "medium",
+      "tags": ["trust"],
+      "seed_memories": [
+        {"content": "SLA Agreement Section 4.2: The service provider guarantees 99.9% uptime measured monthly, excluding scheduled maintenance windows (max 4 hours/month). Downtime is calculated as consecutive minutes where the service returns 5xx errors for >50% of requests. Credits are issued at 10% of monthly fee per 0.1% below SLA, capped at 30% of monthly fee. Credits must be claimed within 30 days of the incident.", "memory_type": "semantic"},
+        {"content": "SLA Agreement Section 4.3: Support response times are 1 hour for P1, 4 hours for P2, 24 hours for P3 incidents.", "memory_type": "semantic"},
+        {"content": "SLA Agreement Section 5.1: Data is backed up every 6 hours with 30-day retention.", "memory_type": "semantic"}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "What is the SLA credit policy for downtime?",
+          "top_k": 3,
+          "expected_contents": ["10% of monthly fee", "0.1%", "30% of monthly fee"],
+          "excluded_contents": []
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-009",
+      "title": "Preference specificity: general vs specific rule",
+      "description": "A general preference and a more specific override both exist. The specific one should win for specific queries.",
+      "domain": "assistant",
+      "difficulty": "L3",
+      "horizon": "medium",
+      "tags": ["trust", "conflict"],
+      "seed_memories": [
+        {"content": "User prefers concise responses, maximum 3 sentences for simple questions.", "memory_type": "profile"},
+        {"content": "For code reviews, user wants detailed explanations with examples, regardless of length.", "memory_type": "profile"},
+        {"content": "User prefers bullet points over prose for lists of items.", "memory_type": "profile"},
+        {"content": "For architecture decisions, user wants pros/cons tables, not bullet points.", "memory_type": "profile"}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "How should I format a code review response?",
+          "top_k": 3,
+          "expected_contents": ["detailed explanations", "examples"],
+          "excluded_contents": ["maximum 3 sentences"]
+        },
+        {
+          "query": "How should I format an architecture decision?",
+          "top_k": 3,
+          "expected_contents": ["pros/cons tables"],
+          "excluded_contents": ["bullet points over prose"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-010",
+      "title": "Multi-step procedure recall",
+      "description": "A multi-step procedure is stored across multiple memories. All steps must be recalled in order.",
+      "domain": "devops",
+      "difficulty": "L3",
+      "horizon": "medium",
+      "tags": ["interruption", "trust"],
+      "seed_memories": [
+        {"content": "Production deployment step 1: Run database migrations with: make db-migrate ENV=prod", "memory_type": "procedural"},
+        {"content": "Production deployment step 2: Build and push Docker image: make docker-push TAG=$(git rev-parse --short HEAD)", "memory_type": "procedural"},
+        {"content": "Production deployment step 3: Update Helm chart values and run: helm upgrade api ./charts/api -f values.prod.yaml", "memory_type": "procedural"},
+        {"content": "Production deployment step 4: Monitor for 10 minutes, check Grafana dashboard 'API Health'.", "memory_type": "procedural"},
+        {"content": "Production deployment step 5: If P99 latency exceeds 500ms, rollback with: helm rollback api", "memory_type": "procedural"},
+        {"content": "Staging deployment uses the same steps but with ENV=staging and values.staging.yaml.", "memory_type": "semantic", "is_noise": true}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "What are the steps to deploy to production?",
+          "top_k": 5,
+          "expected_contents": ["db-migrate", "docker-push", "helm upgrade", "Grafana", "rollback"],
+          "excluded_contents": ["staging"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-011",
+      "title": "Numeric threshold precision: wrong number must be excluded",
+      "description": "Multiple numeric thresholds exist. The query must return the exact one, not similar-sounding ones.",
+      "domain": "engineering",
+      "difficulty": "L2",
+      "horizon": "short",
+      "tags": ["trust"],
+      "seed_memories": [
+        {"content": "Alert threshold: CPU usage above 80% for 5 minutes triggers PagerDuty P2 alert.", "memory_type": "semantic"},
+        {"content": "Alert threshold: Memory usage above 90% triggers P1 alert immediately.", "memory_type": "semantic"},
+        {"content": "Alert threshold: Disk usage above 85% triggers P2 alert.", "memory_type": "semantic"},
+        {"content": "Alert threshold: Error rate above 1% over 5 minutes triggers P1 alert.", "memory_type": "semantic"},
+        {"content": "Alert threshold: P99 latency above 2 seconds triggers P2 alert.", "memory_type": "semantic"}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "At what memory usage percentage do we get a P1 alert?",
+          "top_k": 3,
+          "expected_contents": ["Memory usage", "90%", "P1"],
+          "excluded_contents": ["80%", "85%", "CPU"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-012",
+      "title": "Contradictory user corrections: latest correction wins",
+      "description": "User corrects a preference twice. Only the most recent correction should be returned.",
+      "domain": "assistant",
+      "difficulty": "L3",
+      "horizon": "long",
+      "tags": ["drift", "conflict"],
+      "seed_memories": [
+        {"content": "User's preferred code style: 2-space indentation, single quotes, no semicolons.", "memory_type": "profile"}
+      ],
+      "steps": [
+        {
+          "action": "correct",
+          "query": "code style indentation",
+          "content": "User's preferred code style: 4-space indentation, double quotes, with semicolons.",
+          "reason": "User switched to a new team with different style guide"
+        },
+        {
+          "action": "correct",
+          "query": "code style indentation",
+          "content": "User's preferred code style: tabs for indentation, single quotes, no semicolons. Using Prettier with default config.",
+          "reason": "User adopted Prettier defaults"
+        }
+      ],
+      "assertions": [
+        {
+          "query": "What is the user's preferred code style?",
+          "top_k": 3,
+          "expected_contents": ["tabs", "Prettier"],
+          "excluded_contents": ["2-space", "4-space", "double quotes"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-013",
+      "title": "Scope isolation: project-specific vs global preference",
+      "description": "A preference applies only to one project. A global preference exists too. Query must return the right one.",
+      "domain": "assistant",
+      "difficulty": "L3",
+      "horizon": "medium",
+      "tags": ["trust", "conflict"],
+      "seed_memories": [
+        {"content": "Global preference: always use async/await over Promise chains.", "memory_type": "profile"},
+        {"content": "Project Phoenix exception: use Promise chains for compatibility with legacy Node.js 12 in the mobile SDK.", "memory_type": "profile"},
+        {"content": "Global preference: use TypeScript strict mode in all new projects.", "memory_type": "profile"},
+        {"content": "Project Phoenix exception: TypeScript strict mode is disabled due to legacy JS migration in progress.", "memory_type": "profile"}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "Should I use async/await in Project Phoenix?",
+          "top_k": 3,
+          "expected_contents": ["Promise chains", "legacy", "mobile SDK"],
+          "excluded_contents": []
+        },
+        {
+          "query": "Should I use TypeScript strict mode in new projects?",
+          "top_k": 3,
+          "expected_contents": ["strict mode", "all new projects"],
+          "excluded_contents": ["Project Phoenix"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-014",
+      "title": "Recall after many unrelated stores",
+      "description": "An important fact is stored early, then many unrelated memories are added. The fact must still be retrievable.",
+      "domain": "engineering",
+      "difficulty": "L3",
+      "horizon": "long",
+      "tags": ["trust", "interruption"],
+      "seed_memories": [
+        {"content": "CRITICAL: The payment processor webhook secret is validated using HMAC-SHA256. Never log the raw payload.", "memory_type": "semantic"},
+        {"content": "Team lunch is on Fridays at noon.", "memory_type": "working", "is_noise": true},
+        {"content": "The office printer is on the 3rd floor, code is 1234.", "memory_type": "working", "is_noise": true},
+        {"content": "Sprint review is next Tuesday at 3pm.", "memory_type": "working", "is_noise": true},
+        {"content": "The new hire starts on Monday, their GitHub handle is @newdev.", "memory_type": "working", "is_noise": true},
+        {"content": "Coffee machine on 2nd floor is broken, use the one on 4th.", "memory_type": "working", "is_noise": true},
+        {"content": "Parking validation is at the front desk.", "memory_type": "working", "is_noise": true}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "How do we validate payment processor webhooks?",
+          "top_k": 3,
+          "expected_contents": ["HMAC-SHA256", "webhook secret", "Never log"],
+          "excluded_contents": ["lunch", "printer", "parking"]
+        }
+      ]
+    },
+    {
+      "scenario_id": "CORE2-015",
+      "title": "Mixed language memory: Chinese + English",
+      "description": "Memories contain both Chinese and English. Query in one language must retrieve memories in both.",
+      "domain": "engineering",
+      "difficulty": "L3",
+      "horizon": "short",
+      "tags": ["trust"],
+      "seed_memories": [
+        {"content": "数据库主从复制延迟不超过 100ms，超过则触发告警。", "memory_type": "semantic"},
+        {"content": "Database replication lag alert threshold: 100ms. Alert goes to #db-ops Slack channel.", "memory_type": "semantic"},
+        {"content": "主库在 us-east-1，从库在 eu-west-1 和 ap-southeast-1。", "memory_type": "semantic"},
+        {"content": "Read replicas handle 80% of SELECT queries to reduce primary load.", "memory_type": "semantic"},
+        {"content": "Redis cluster is separate from the database replication setup.", "memory_type": "semantic", "is_noise": true}
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "What is the database replication lag threshold?",
+          "top_k": 3,
+          "expected_contents": ["100ms", "replication"],
+          "excluded_contents": ["Redis"]
+        },
+        {
+          "query": "数据库复制延迟超过多少会告警？",
+          "top_k": 3,
+          "expected_contents": ["100ms", "复制"],
+          "excluded_contents": ["Redis"]
+        }
+      ]
+    }
+  ]
+}

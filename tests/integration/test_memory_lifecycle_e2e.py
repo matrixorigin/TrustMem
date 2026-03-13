@@ -749,3 +749,83 @@ class TestRunDailyAll:
             assert w.is_active == 0
             assert w.content == "weak T4"
             assert w.initial_confidence == 0.4
+
+
+class TestPurgeGraphNodeSync:
+    """Regression tests: purge/correct must sync memory_graph_nodes.is_active.
+
+    Bug: editor.purge() and store.supersede() only deactivated mem_memories,
+    leaving memory_graph_nodes.is_active=1. Graph retriever would still return
+    deleted/superseded memories.
+    """
+
+    def _insert_graph_node(self, db, user_id: str, memory_id: str, content: str):
+        """Insert a graph node linked to a memory."""
+        from memoria.core.memory.models.graph import GraphNode
+
+        node_id = _mid()
+        node = GraphNode(
+            node_id=node_id,
+            user_id=user_id,
+            node_type="semantic",
+            content=content,
+            memory_id=memory_id,
+            is_active=1,
+        )
+        db.add(node)
+        db.commit()
+        return node_id
+
+    def _get_graph_node(self, db, node_id: str):
+        from memoria.core.memory.models.graph import GraphNode
+
+        db.expire_all()
+        return db.query(GraphNode).filter(GraphNode.node_id == node_id).first()
+
+    def test_purge_by_id_deactivates_graph_node(self, db, db_factory):
+        """Purging a memory by ID must also deactivate its graph node."""
+        from memoria.core.memory.factory import create_editor
+
+        uid = _uid()
+        mem = _insert(db, uid, "memory to purge")
+        node_id = self._insert_graph_node(db, uid, mem.memory_id, mem.content)
+
+        editor = create_editor(db_factory, user_id=uid, embed_client=None)
+        result = editor.purge(uid, memory_ids=[mem.memory_id])
+
+        assert result.deactivated == 1
+        assert _get(db, mem.memory_id).is_active == 0
+        # Graph node must also be deactivated
+        gnode = self._get_graph_node(db, node_id)
+        assert gnode.is_active == 0, (
+            "Graph node still active after purge — stale retrieval bug"
+        )
+
+    def test_supersede_deactivates_graph_node(self, db, db_factory):
+        """Correcting (superseding) a memory must also deactivate its graph node."""
+        from memoria.core.memory.tabular.store import MemoryStore
+        from memoria.core.memory.types import Memory, MemoryType, TrustTier
+        from datetime import datetime, timezone
+
+        uid = _uid()
+        mem = _insert(db, uid, "old content")
+        node_id = self._insert_graph_node(db, uid, mem.memory_id, mem.content)
+
+        store = MemoryStore(db_factory)
+        new_mem = Memory(
+            memory_id=_mid(),
+            user_id=uid,
+            content="corrected content",
+            memory_type=MemoryType.SEMANTIC,
+            trust_tier=TrustTier.T2_CURATED,
+            initial_confidence=0.9,
+            observed_at=datetime.now(timezone.utc),
+        )
+        store.supersede(mem.memory_id, new_mem)
+
+        assert _get(db, mem.memory_id).is_active == 0
+        # Graph node for old memory must also be deactivated
+        gnode = self._get_graph_node(db, node_id)
+        assert gnode.is_active == 0, (
+            "Graph node still active after supersede — stale retrieval bug"
+        )

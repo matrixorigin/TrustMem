@@ -1,0 +1,691 @@
+{
+  "dataset_id": "memoria-large-graph-v2",
+  "version": "v1.0",
+  "description": "Large graph benchmark v2: 60 seed memories per scenario, 6-8 assertions. Tests multi-hop reasoning, alias resolution, cross-team dependency, temporal state, and role-based access in a realistic engineering org.",
+  "scenarios": [
+    {
+      "scenario_id": "LARGE2-001",
+      "title": "Large org: person → team → service → vulnerability chain",
+      "description": "60 memories covering a full engineering org. Multi-hop queries require traversing person→team→service→library→CVE. Noise memories about unrelated teams should not appear.",
+      "domain": "engineering",
+      "difficulty": "L5",
+      "horizon": "long",
+      "tags": [
+        "trust"
+      ],
+      "seed_memories": [
+        {
+          "content": "Alice 是认证团队的 tech lead，负责 auth-service 和 token-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "auth-service 使用 jsonwebtoken v8.5.1 处理 JWT 签发和验证。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "jsonwebtoken v8.5.1 存在 CVE-2024-33531，攻击者可伪造任意 token。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "token-service 依赖 passport.js v0.6.0 做 OAuth2 流程。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "passport.js v0.6.0 有 session fixation 漏洞 CVE-2023-26159。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Alice 的团队还维护 sso-service，支持 SAML 2.0 和 OIDC。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "sso-service 使用 node-saml v4.0.0，该版本无已知漏洞。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "认证团队每周五做 on-call 轮换，Alice 本月负责。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Bob 负责 payment-service，使用 Stripe SDK v5.1.0 处理支付。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "payment-service 依赖 auth-service 验证用户身份。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Stripe SDK v5.1.0 无已知安全漏洞，上次审计通过。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Bob 的团队还负责 refund-service 和 invoice-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "invoice-service 使用 PDFKit v0.13.0 生成 PDF 发票。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "PDFKit v0.13.0 存在 CVE-2024-11111，可导致任意文件读取。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Bob 计划 Q3 升级 PDFKit 到 v0.14.0 修复漏洞。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Carol 是数据团队 lead，负责 data-pipeline 和 analytics-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "data-pipeline 使用 Apache Spark 3.4.1 做批处理。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "analytics-service 用 ClickHouse 存储事件数据，保留 90 天。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Carol 的团队还维护 ml-training-service，使用 PyTorch 2.1。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "ml-training-service 每周日凌晨 3 点自动触发模型训练。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Dave 负责基础设施，管理 Kubernetes 集群和 CI/CD 流水线。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "CI/CD 流水线基于 Jenkins，部署在 Kubernetes 1.28 上。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Dave 的团队还负责 service-mesh（Istio 1.19）和 secrets 管理（Vault）。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Vault 用于存储所有服务的 API key 和数据库密码。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Kubernetes 1.28 存在 CVE-2023-44487（HTTP/2 rapid reset），已打补丁。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Eve 是前端 lead，负责 web-app 和 mobile-app。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "web-app 使用 React 18 + TypeScript，通过 auth-service 做用户认证。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "mobile-app 使用 React Native 0.73，依赖 token-service 获取 JWT。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Eve 的团队还维护 design-system，基于 Storybook 7.6。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "web-app 使用 webpack 5.88，mobile-app 使用 Metro bundler。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Frank 负责 SRE，监控所有服务的 SLA，P99 延迟目标 200ms。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Grafana 监控面板显示 auth-service P99 延迟最近升到 450ms。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Frank 的团队使用 PagerDuty 做告警，严重告警 5 分钟内响应。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "auth-service 上周触发了 3 次 P1 告警，均与 Redis 连接超时有关。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Redis 集群用于 auth-service 的 token 缓存，TTL 1 小时。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "PostgreSQL 15 是主数据库，auth-service 和 payment-service 共用同一实例。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "所有服务通过 API Gateway（Kong 3.4）对外暴露，统一做认证和限流。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "API Gateway 依赖 auth-service 验证每个请求的 JWT token。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Grace 是安全工程师，负责每季度的依赖审计和漏洞扫描。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "上次安全审计（2025-Q1）发现 4 个高危漏洞，已修复 3 个。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Grace 使用 Snyk 做依赖扫描，每次 PR 自动触发。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "待修复的高危漏洞是 PDFKit CVE-2024-11111，负责人是 Bob。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Henry 负责 notification-service，使用 SendGrid 发送邮件通知。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "notification-service 依赖 auth-service 验证用户身份后才发送通知。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Iris 是产品经理，负责用户增长和留存指标，不直接管理服务。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Jack 负责 search-service，使用 Elasticsearch 7.17 做全文搜索。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "search-service 通过 Redis 缓存热门搜索结果，TTL 5 分钟。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Kate 负责 billing-service，与 payment-service 紧密集成。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "billing-service 使用 Apache Kafka 3.5 做事件流处理。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Leo 负责 recommendation-service，使用协同过滤算法。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "recommendation-service 依赖 ml-training-service 提供的模型。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Mia 负责 content-service，管理用户生成内容的存储和审核。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "content-service 使用 AWS S3 存储媒体文件，CloudFront 做 CDN。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Nick 负责 geo-service，提供地理位置和地图功能。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "geo-service 使用 PostGIS 扩展做地理空间查询。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Olivia 负责 chat-service，使用 WebSocket 实现实时通信。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "chat-service 依赖 auth-service 验证 WebSocket 连接的用户身份。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Peter 负责 export-service，支持数据导出为 CSV/Excel/PDF 格式。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "export-service 使用 PDFKit 生成 PDF，与 invoice-service 共用同一版本。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Quinn 是 QA lead，负责端到端测试和性能测试。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "团队使用 GitHub Actions 做代码审查，所有 PR 需要 2 人 approve。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "生产环境部署在 AWS us-east-1，使用 EKS 管理 Kubernetes 集群。",
+          "memory_type": "semantic"
+        }
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "Alice 负责的模块有什么安全漏洞？",
+          "top_k": 5,
+          "expected_contents": [
+            "CVE-2024-33531",
+            "CVE-2023-26159"
+          ],
+          "excluded_contents": [
+            "PDFKit",
+            "Kubernetes"
+          ]
+        },
+        {
+          "query": "哪些服务依赖 auth-service？",
+          "top_k": 6,
+          "expected_contents": [
+            "web-app",
+            "notification-service",
+            "API Gateway",
+            "chat-service"
+          ],
+          "excluded_contents": [
+            "data-pipeline",
+            "ml-training-service"
+          ]
+        },
+        {
+          "query": "Bob 负责的服务有哪些未修复的漏洞？",
+          "top_k": 5,
+          "expected_contents": [
+            "PDFKit",
+            "CVE-2024-11111"
+          ],
+          "excluded_contents": [
+            "jsonwebtoken",
+            "passport.js"
+          ]
+        },
+        {
+          "query": "哪些服务使用了 PDFKit？",
+          "top_k": 5,
+          "expected_contents": [
+            "invoice-service",
+            "export-service"
+          ],
+          "excluded_contents": [
+            "auth-service",
+            "data-pipeline"
+          ]
+        },
+        {
+          "query": "Grace 发现的待修复漏洞是什么，谁负责？",
+          "top_k": 5,
+          "expected_contents": [
+            "PDFKit",
+            "CVE-2024-11111",
+            "Bob"
+          ],
+          "excluded_contents": [
+            "Alice",
+            "Dave"
+          ]
+        },
+        {
+          "query": "auth-service 最近有什么性能问题？",
+          "top_k": 5,
+          "expected_contents": [
+            "450ms",
+            "Redis",
+            "P1"
+          ],
+          "excluded_contents": [
+            "Stripe",
+            "ClickHouse"
+          ]
+        }
+      ],
+      "maturation": [
+        "extract_entities",
+        "consolidate"
+      ]
+    },
+    {
+      "scenario_id": "LARGE2-002",
+      "title": "Microservice dependency graph: upstream/downstream impact analysis",
+      "description": "60 memories covering a microservice mesh. Queries ask about upstream/downstream impact when a service changes. Requires traversing dependency edges across multiple hops.",
+      "domain": "engineering",
+      "difficulty": "L5",
+      "horizon": "long",
+      "tags": [
+        "trust"
+      ],
+      "seed_memories": [
+        {
+          "content": "user-service 是核心服务，存储用户账户信息，被几乎所有服务依赖。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "auth-service 依赖 user-service 查询用户信息做身份验证。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "profile-service 依赖 user-service 获取用户基本信息。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "order-service 依赖 user-service 获取收货地址和联系方式。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "notification-service 依赖 user-service 获取用户邮箱和手机号。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "recommendation-service 依赖 user-service 获取用户偏好标签。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "order-service 是订单核心服务，处理下单、支付、发货全流程。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "cart-service 依赖 order-service 提交购物车为正式订单。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "payment-service 依赖 order-service 获取订单金额做支付。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "shipping-service 依赖 order-service 获取发货信息。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "invoice-service 依赖 order-service 生成订单发票。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "analytics-service 消费 order-service 的事件流做销售分析。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "inventory-service 管理商品库存，被 order-service 和 cart-service 依赖。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "order-service 在下单时调用 inventory-service 扣减库存。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "cart-service 调用 inventory-service 检查商品是否有货。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "warehouse-service 依赖 inventory-service 同步仓库库存数据。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "supplier-service 依赖 inventory-service 触发自动补货。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "search-service 提供商品搜索，依赖 product-service 获取商品数据。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "product-service 管理商品信息，被 search-service 和 cart-service 依赖。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "cart-service 依赖 product-service 获取商品价格和图片。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "recommendation-service 依赖 product-service 获取商品特征做推荐。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "notification-service 发送邮件、短信、推送通知。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "order-service 在订单状态变更时调用 notification-service 通知用户。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "payment-service 在支付成功/失败时调用 notification-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "shipping-service 在发货和签收时调用 notification-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "所有服务通过 Kafka 做异步事件通信，同步调用用 gRPC。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "API Gateway 是所有外部请求的入口，依赖 auth-service 做认证。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "service-mesh 使用 Istio，所有服务间通信经过 sidecar 代理。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Redis 集群被 auth-service、search-service、cart-service 共用做缓存。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "PostgreSQL 主库被 user-service、order-service、payment-service 共用。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Alice 负责 auth-service 和 user-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Bob 负责 payment-service 和 invoice-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Carol 负责 order-service 和 cart-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Dave 负责 inventory-service 和 warehouse-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Eve 负责 product-service 和 search-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Frank 负责 shipping-service 和 supplier-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Grace 负责 notification-service 和 profile-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "Henry 负责 recommendation-service 和 analytics-service。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "user-service SLA: 99.99% 可用性，P99 < 50ms。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "order-service SLA: 99.9% 可用性，P99 < 200ms。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "payment-service SLA: 99.99% 可用性，P99 < 500ms（含 Stripe 延迟）。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "inventory-service SLA: 99.9% 可用性，P99 < 100ms。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "上周 user-service 发生 30 分钟宕机，影响所有依赖服务。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "user-service 宕机期间，auth-service 无法验证用户，所有登录请求失败。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "user-service 宕机期间，order-service 无法获取收货地址，新订单全部失败。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "user-service 宕机根因：PostgreSQL 主库磁盘满，触发只读模式。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "磁盘满的原因：慢查询日志未清理，积累了 200GB 日志文件。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "user-service 计划 Q3 迁移到独立 PostgreSQL 实例，解耦与 order-service 的共用。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "inventory-service 计划引入 Redis 做库存缓存，减少数据库压力。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "search-service 计划升级 Elasticsearch 从 7.17 到 8.x。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "设计团队使用 Figma 做 UI 设计，与工程团队通过 Zeplin 协作。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "产品团队使用 Jira 管理需求，每两周一个 sprint。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "公司使用 Confluence 做知识库，技术文档存放在 Engineering 空间。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "HR 系统使用 Workday，与工程系统无直接集成。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "客服团队使用 Zendesk，通过 webhook 接收订单状态变更通知。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "数据分析团队使用 Tableau 做业务报表，数据来自 ClickHouse。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "市场团队使用 HubSpot 做 CRM，与 notification-service 有邮件集成。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "法务团队要求所有用户数据在欧盟境内存储，GDPR 合规。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "安全团队每季度做渗透测试，上次测试未发现高危漏洞。",
+          "memory_type": "semantic"
+        },
+        {
+          "content": "公司 2025 年技术目标：将 P99 延迟降低 30%，可用性提升到 99.99%。",
+          "memory_type": "semantic"
+        }
+      ],
+      "steps": [],
+      "assertions": [
+        {
+          "query": "Alice 负责的服务宕机会影响哪些下游业务流程？",
+          "top_k": 8,
+          "expected_contents": [
+            "API Gateway",
+            "order-service",
+            "notification-service",
+            "chat-service"
+          ],
+          "excluded_contents": [
+            "warehouse-service",
+            "supplier-service"
+          ]
+        },
+        {
+          "query": "PostgreSQL 主库故障会影响哪些团队负责人？",
+          "top_k": 8,
+          "expected_contents": [
+            "Alice",
+            "Carol",
+            "Bob"
+          ],
+          "excluded_contents": [
+            "Eve",
+            "Frank"
+          ]
+        },
+        {
+          "query": "Dave 负责的服务出问题，哪些服务的下单流程会受影响？",
+          "top_k": 8,
+          "expected_contents": [
+            "order-service",
+            "cart-service",
+            "warehouse-service"
+          ],
+          "excluded_contents": [
+            "auth-service",
+            "notification-service"
+          ]
+        },
+        {
+          "query": "Redis 集群故障会影响哪些团队负责人？",
+          "top_k": 8,
+          "expected_contents": [
+            "Alice",
+            "Eve",
+            "Carol"
+          ],
+          "excluded_contents": [
+            "Frank",
+            "Henry"
+          ]
+        },
+        {
+          "query": "如果 order-service 不可用，哪些人需要收到通知？",
+          "top_k": 8,
+          "expected_contents": [
+            "Carol",
+            "Bob",
+            "shipping-service",
+            "payment-service"
+          ],
+          "excluded_contents": [
+            "product-service",
+            "recommendation-service"
+          ]
+        },
+        {
+          "query": "上周宕机事件的根因修复后，哪些团队的服务会受益？",
+          "top_k": 8,
+          "expected_contents": [
+            "user-service",
+            "order-service",
+            "PostgreSQL"
+          ],
+          "excluded_contents": [
+            "Redis",
+            "Elasticsearch"
+          ]
+        }
+      ],
+      "maturation": [
+        "extract_entities",
+        "consolidate"
+      ]
+    }
+  ]
+}

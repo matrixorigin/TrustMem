@@ -39,6 +39,7 @@ class ActivationIndexManager:
         *,
         params: dict[str, Any] | None = None,
         config: MemoryGovernanceConfig | None = None,
+        embed_fn: Any | None = None,
     ) -> None:
         self._db_factory = db_factory
         if config is None:
@@ -47,7 +48,7 @@ class ActivationIndexManager:
             config = DEFAULT_CONFIG
         self._config = config
         self._store = GraphStore(db_factory)
-        self._builder = GraphBuilder(self._store)
+        self._builder = GraphBuilder(self._store, config=config, embed_fn=embed_fn)
         self._consolidator = GraphConsolidator(db_factory, config=config)
         self._pending_sync: list[str] = []
 

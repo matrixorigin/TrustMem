@@ -322,6 +322,15 @@ class MemoryEditor:
                     if result.rowcount > 0:
                         deactivated += result.rowcount
                         purged_ids.append(mid)
+                # Sync: deactivate graph nodes whose backing memory was purged
+                if purged_ids:
+                    db.execute(
+                        text(
+                            "UPDATE memory_graph_nodes SET is_active = 0 "
+                            "WHERE memory_id IN :mids AND user_id = :uid"
+                        ),
+                        {"mids": tuple(purged_ids), "uid": user_id},
+                    )
 
             if memory_types:
                 type_vals = [mt.value for mt in memory_types]
@@ -346,6 +355,18 @@ class MemoryEditor:
                     {"uid": user_id, "before": before},
                 )
                 deactivated += result.rowcount
+
+            # Sync graph nodes: deactivate any graph node whose backing memory is inactive
+            if deactivated > 0:
+                db.execute(
+                    text(
+                        "UPDATE memory_graph_nodes g "
+                        "JOIN mem_memories m ON g.memory_id = m.memory_id "
+                        "SET g.is_active = 0 "
+                        "WHERE g.user_id = :uid AND g.is_active = 1 AND m.is_active = 0"
+                    ),
+                    {"uid": user_id},
+                )
 
             db.commit()
 

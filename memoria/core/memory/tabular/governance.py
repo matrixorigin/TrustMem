@@ -90,6 +90,50 @@ class GovernanceScheduler(DbConsumer):
             pollution_threshold=self.config.pollution_threshold,
         )
 
+    # ── Audit helper ──────────────────────────────────────────────────
+
+    _AUDIT_MAX_IDS = 500
+
+    def _log_governance_edit(
+        self,
+        user_id: str,
+        operation: str,
+        target_ids: list[str],
+        reason: str,
+    ) -> None:
+        """Log governance mutation to mem_edit_log. Best-effort."""
+        try:
+            import uuid
+
+            ids = target_ids[: self._AUDIT_MAX_IDS]
+            if len(target_ids) > self._AUDIT_MAX_IDS:
+                reason = (
+                    f"{reason} (showing {self._AUDIT_MAX_IDS} of {len(target_ids)})"
+                )
+            with self._db() as db:
+                db.execute(
+                    text(
+                        "INSERT INTO mem_edit_log "
+                        "(edit_id, user_id, operation, target_ids, reason, created_by) "
+                        "VALUES (:eid, :uid, :op, :tids, :reason, :uid)"
+                    ),
+                    {
+                        "eid": uuid.uuid4().hex,
+                        "uid": user_id,
+                        "op": operation,
+                        "tids": json.dumps(ids),
+                        "reason": reason,
+                    },
+                )
+                db.commit()
+        except Exception:
+            logger.debug(
+                "Failed to log governance edit for %s/%s",
+                user_id,
+                operation,
+                exc_info=True,
+            )
+
     # ── Convenience: run all ──────────────────────────────────────────
 
     def run_cycle(self, user_id: str) -> GovernanceCycleResult:
@@ -439,16 +483,44 @@ class GovernanceScheduler(DbConsumer):
         """Archive working memories from sessions inactive > threshold hours."""
         stale_hours = self.config.working_memory_stale_hours
         with self._db() as db:
-            result = db.execute(
-                text("""
-                UPDATE mem_memories SET is_active = 0, updated_at = NOW()
-                WHERE memory_type = 'working' AND is_active = 1
-                  AND TIMESTAMPDIFF(HOUR, observed_at, NOW()) > :stale_hours
-            """),
+            # SELECT first to capture affected IDs for audit
+            rows = db.execute(
+                text(
+                    "SELECT memory_id, user_id FROM mem_memories "
+                    "WHERE memory_type = 'working' AND is_active = 1 "
+                    "AND TIMESTAMPDIFF(HOUR, observed_at, NOW()) > :stale_hours"
+                ),
                 {"stale_hours": stale_hours},
-            )
+            ).fetchall()
+            if not rows:
+                return 0
+            ids = [r.memory_id for r in rows]
+            for i in range(0, len(ids), 500):
+                batch = ids[i : i + 500]
+                placeholders = ", ".join(f":id{j}" for j in range(len(batch)))
+                params: dict[str, object] = {
+                    f"id{j}": mid for j, mid in enumerate(batch)
+                }
+                db.execute(
+                    text(
+                        f"UPDATE mem_memories SET is_active = 0, updated_at = NOW() "
+                        f"WHERE memory_id IN ({placeholders})"
+                    ),
+                    params,
+                )
             db.commit()
-            count = result.rowcount  # type: ignore[attr-defined]
+            # Audit: group by user_id
+            by_user: dict[str, list[str]] = {}
+            for r in rows:
+                by_user.setdefault(r.user_id, []).append(r.memory_id)
+            for uid, mids in by_user.items():
+                self._log_governance_edit(
+                    uid,
+                    "governance:archive_working",
+                    mids,
+                    f"Archived {len(mids)} stale working memories (>{stale_hours}h)",
+                )
+        count = len(ids)
         if count > 0:
             logger.info("Archived %d stale working memories (>%dh)", count, stale_hours)
         return count
@@ -476,13 +548,14 @@ class GovernanceScheduler(DbConsumer):
         """
         threshold = self.config.quarantine_threshold
         half_lives = self.config.half_lives
-        quarantined = 0
+        quarantined_ids: list[str] = []
         with self._db() as db:
             for tier in TrustTier:
                 hl = half_lives[tier.value]
-                result = db.execute(
+                # SELECT first to capture affected IDs
+                rows = db.execute(
                     text("""
-                    UPDATE mem_memories SET is_active = 0, updated_at = NOW()
+                    SELECT memory_id FROM mem_memories
                     WHERE user_id = :uid AND is_active = 1
                       AND COALESCE(trust_tier, 'T3') = :tier
                       AND (initial_confidence * EXP(-TIMESTAMPDIFF(DAY, observed_at, NOW()) / :hl)) < :threshold
@@ -493,10 +566,32 @@ class GovernanceScheduler(DbConsumer):
                         "hl": hl,
                         "threshold": threshold,
                     },
-                )
-                quarantined += result.rowcount  # type: ignore[attr-defined]
+                ).fetchall()
+                if rows:
+                    ids = [r.memory_id for r in rows]
+                    quarantined_ids.extend(ids)
+                    for i in range(0, len(ids), 500):
+                        batch = ids[i : i + 500]
+                        placeholders = ", ".join(f":id{j}" for j in range(len(batch)))
+                        params: dict[str, object] = {
+                            f"id{j}": mid for j, mid in enumerate(batch)
+                        }
+                        db.execute(
+                            text(
+                                f"UPDATE mem_memories SET is_active = 0, updated_at = NOW() "
+                                f"WHERE memory_id IN ({placeholders})"
+                            ),
+                            params,
+                        )
             db.commit()
+        quarantined = len(quarantined_ids)
         if quarantined > 0:
+            self._log_governance_edit(
+                user_id,
+                "governance:quarantine",
+                quarantined_ids,
+                f"Quarantined {quarantined} memories below threshold {threshold:.2f}",
+            )
             logger.info(
                 "Quarantined %d memories below threshold %.2f", quarantined, threshold
             )
@@ -515,10 +610,10 @@ class GovernanceScheduler(DbConsumer):
         Called from run_daily() so it runs once per day per user.
         """
         with self._db() as db:
-            result = db.execute(
+            # SELECT first to capture affected IDs
+            rows = db.execute(
                 text("""
-                UPDATE mem_memories AS inc
-                SET inc.is_active = 0, inc.updated_at = NOW()
+                SELECT inc.memory_id FROM mem_memories AS inc
                 WHERE inc.user_id = :uid
                   AND inc.is_active = 1
                   AND inc.content LIKE '[session_summary:incremental]%'
@@ -534,11 +629,33 @@ class GovernanceScheduler(DbConsumer):
                   )
             """),
                 {"uid": user_id, "hours": older_than_hours},
-            )
+            ).fetchall()
+            if not rows:
+                return 0
+            ids = [r.memory_id for r in rows]
+            for i in range(0, len(ids), 500):
+                batch = ids[i : i + 500]
+                placeholders = ", ".join(f":id{j}" for j in range(len(batch)))
+                params: dict[str, object] = {
+                    f"id{j}": mid for j, mid in enumerate(batch)
+                }
+                db.execute(
+                    text(
+                        f"UPDATE mem_memories SET is_active = 0, updated_at = NOW() "
+                        f"WHERE memory_id IN ({placeholders})"
+                    ),
+                    params,
+                )
             db.commit()
-            count = result.rowcount  # type: ignore[attr-defined]
+            count = len(ids)
 
         if count:
+            self._log_governance_edit(
+                user_id,
+                "governance:cleanup_orphaned_incrementals",
+                ids,
+                f"Cleaned {count} orphaned incremental summaries",
+            )
             logger.info(
                 "Cleaned %d orphaned incremental summaries for user %s", count, user_id
             )
@@ -647,6 +764,12 @@ class GovernanceScheduler(DbConsumer):
                 deactivated = len(to_deactivate)
 
         if deactivated:
+            self._log_governance_edit(
+                user_id,
+                "governance:compress_redundant",
+                list(to_deactivate),
+                f"Compressed {deactivated} redundant memories (threshold={threshold:.2f})",
+            )
             logger.info(
                 "Compressed %d redundant memories for user %s (threshold=%.2f)",
                 deactivated,

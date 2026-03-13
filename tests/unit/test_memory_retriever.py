@@ -43,6 +43,7 @@ def _mem_row(
     r.trust_tier = trust_tier
     r.relevance = relevance
     r.ft_score = ft_score
+    r.access_count = 0
     return r
 
 
@@ -77,7 +78,9 @@ class TestRetrievePhase1:
 
     @pytest.fixture
     def retriever(self, mock_db):
-        return MemoryRetriever(db_factory=lambda: mock_db)
+        r = MemoryRetriever(db_factory=lambda: mock_db)
+        r._load_l0 = MagicMock(return_value=[])  # L0 not under test here
+        return r
 
     def test_returns_memories_from_fallback(self, retriever, mock_db):
         rows = [_mem_row("m1", "Go testing"), _mem_row("m2", "Python flask")]
@@ -110,7 +113,9 @@ class TestRetrievePhase2:
 
     @pytest.fixture
     def retriever(self, mock_db):
-        return MemoryRetriever(db_factory=lambda: mock_db)
+        r = MemoryRetriever(db_factory=lambda: mock_db)
+        r._load_l0 = MagicMock(return_value=[])  # L0 not under test here
+        return r
 
     def test_vector_path_invoked_with_embedding(self, retriever, mock_db):
         """When query_embedding is provided, phase2 should run."""
@@ -149,7 +154,9 @@ class TestRetrieveExplain:
 
     @pytest.fixture
     def retriever(self, mock_db):
-        return MemoryRetriever(db_factory=lambda: mock_db)
+        r = MemoryRetriever(db_factory=lambda: mock_db)
+        r._load_l0 = MagicMock(return_value=[])  # L0 not under test here
+        return r
 
     def test_explain_returns_stats(self, retriever, mock_db):
         _, stats = retriever.retrieve("u1", "test", session_id="s1", explain=True)

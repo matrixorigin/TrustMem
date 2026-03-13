@@ -9,6 +9,7 @@ from sqlalchemy import (
     Column,
     Float,
     Index,
+    Integer,
     SmallInteger,
     String,
     Text,
@@ -52,6 +53,7 @@ class MemoryRecord(Base):
     embedding = Column(VectorType(EMBEDDING_DIM, VectorPrecision.F32))
     source_event_ids = Column(JSON, nullable=False, default=list)
     superseded_by = Column(String(64), nullable=True)
+    access_count = Column(Integer, server_default="0", nullable=False)
     is_active = Column(SmallInteger, server_default="1", nullable=False)
     observed_at = Column(DateTime6, nullable=False)
     created_at = Column(DateTime6, default=func.now(), nullable=False)

@@ -36,9 +36,16 @@ class TestRunHourly:
         assert r.cleaned_tool_results == 3
 
     def test_archives_working_memories(self, scheduler, mock_db):
-        # First call = tool_result cleanup (0), second = working archival (2)
-        results = [MagicMock(rowcount=0), MagicMock(rowcount=2)]
-        mock_db.execute.side_effect = results
+        # First call = tool_result cleanup (rowcount=0)
+        tool_result = MagicMock(rowcount=0)
+        # Second call = SELECT for working archival (returns 2 rows)
+        row1 = MagicMock(memory_id="m1", user_id="u1")
+        row2 = MagicMock(memory_id="m2", user_id="u1")
+        select_result = MagicMock()
+        select_result.fetchall.return_value = [row1, row2]
+        # Third call = UPDATE (batch deactivate)
+        update_result = MagicMock(rowcount=2)
+        mock_db.execute.side_effect = [tool_result, select_result, update_result]
         r = scheduler.run_hourly()
         assert r.archived_working == 2
 
@@ -59,11 +66,16 @@ class TestRunDaily:
         assert r.cleaned_stale == 5
 
     def test_quarantines_low_confidence(self, scheduler, mock_db):
-        # stale cleanup returns 0, then 4 quarantine calls (one per tier) each return 1
-        results = [MagicMock(rowcount=0)]  # stale
-        for _ in range(4):
-            results.append(MagicMock(rowcount=1))  # quarantine per tier
-        mock_db.execute.side_effect = results
+        # stale cleanup returns 0, then 4 quarantine tiers: each SELECT returns 1 row, then UPDATE
+        results = [MagicMock(rowcount=0)]  # stale cleanup
+        for i in range(4):
+            select_r = MagicMock()
+            select_r.fetchall.return_value = [MagicMock(memory_id=f"q{i}")]
+            results.append(select_r)  # SELECT per tier
+            results.append(MagicMock(rowcount=1))  # UPDATE per tier
+        # Remaining calls from pollution detection, orphaned incrementals, compress_redundant
+        # may also call execute — use default mock for those
+        mock_db.execute.side_effect = results + [MagicMock(rowcount=0)] * 10
         r = scheduler.run_daily("u1")
         assert r.quarantined == 4
 

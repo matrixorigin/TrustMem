@@ -1,10 +1,14 @@
 """Entity SQLAlchemy models — canonical entity registry + memory-entity links."""
 
+from matrixone import VectorPrecision, VectorType
+
+if not getattr(VectorType, "cache_ok", False):
+    VectorType.cache_ok = True
 from sqlalchemy import Column, Float, Index, String, UniqueConstraint
 from sqlalchemy.sql import func
 
 from memoria.core.base import Base
-from memoria.core.memory.models._sa_types import DateTime6
+from memoria.core.memory.models._sa_types import EMBEDDING_DIM, DateTime6
 
 
 class Entity(Base):
@@ -21,6 +25,7 @@ class Entity(Base):
     name = Column(String(200), nullable=False)
     display_name = Column(String(200))
     entity_type = Column(String(20), nullable=False, server_default="concept")
+    embedding = Column(VectorType(EMBEDDING_DIM, VectorPrecision.F32))
     created_at = Column(DateTime6, default=func.now(), nullable=False)
 
 

@@ -4,6 +4,7 @@ Usage:
     memoria init       # Detect tools, write MCP config + steering rules
     memoria status     # Show configuration status
     memoria update-rules  # Update steering rules to latest version
+    memoria benchmark  # Run one-click memory benchmark
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_VERSION = "0.1.8"
+_VERSION = "0.1.12"
 _MCP_KEY = "memoria"
 
 
@@ -256,6 +257,157 @@ def cmd_update_rules(args: argparse.Namespace) -> None:
         print("No rule files found. Run 'memoria init' first.")
 
 
+def cmd_benchmark(args: argparse.Namespace) -> None:
+    from memoria.core.memory.benchmark import (
+        BenchmarkExecutor,
+        load_dataset,
+        score_dataset,
+        score_scenario,
+        validate_dataset,
+    )
+
+    dataset_path = Path(args.dataset)
+    if not dataset_path.exists():
+        # Try built-in datasets shipped with the package
+        builtin = Path(__file__).parent / "datasets" / args.dataset
+        if not builtin.exists():
+            print(f"Dataset not found: {args.dataset}")
+            return
+        dataset_path = builtin
+
+    if args.validate_only:
+        errors = validate_dataset(dataset_path)
+        if errors:
+            print(f"Validation failed ({len(errors)} errors):")
+            for e in errors:
+                print(f"  ❌ {e}")
+        else:
+            print("✅ Dataset is valid.")
+        return
+
+    api_url = args.api_url
+    api_token = args.api_token
+    if not api_url or not api_token:
+        print(
+            "Benchmark requires --api-url and --api-token to run against a live Memoria instance."
+        )
+        return
+
+    dataset = load_dataset(dataset_path)
+    print(
+        f"Dataset: {dataset.dataset_id} {dataset.version} ({len(dataset.scenarios)} scenarios)"
+    )
+
+    strategy = getattr(args, "strategy", None)
+    if strategy:
+        print(f"Strategy: {strategy}")
+
+    if getattr(args, "grid_search", False):
+        from memoria.core.memory.benchmark.grid_search import (
+            FAST_GRID,
+            FULL_GRID,
+            run_grid_search,
+        )
+
+        grid_level = getattr(args, "grid_level", "fast")
+        grid = FULL_GRID if grid_level == "full" else FAST_GRID
+        combos = 1
+        for v in grid.values():
+            combos *= len(v)
+        print(f"Grid search: {grid_level} ({combos} combinations)")
+
+        run_grid_search(
+            dataset_path=str(dataset_path),
+            api_url=api_url,
+            api_token=api_token,
+            compose_dir=str(Path(__file__).parent.parent),
+            grid=grid,
+            timeout=args.timeout,
+        )
+        return
+
+    executor = BenchmarkExecutor(
+        api_url=api_url,
+        api_token=api_token,
+        timeout=args.timeout,
+        strategy=strategy,
+    )
+
+    compare = getattr(args, "compare", None)
+    if compare:
+        # Compare mode: seed once, evaluate with both strategies on same data
+        strat_a, strat_b = compare
+        print(f"Compare mode: {strat_a} vs {strat_b} (same data)\n")
+        try:
+            results_a: dict[str, float] = {}
+            results_b: dict[str, float] = {}
+            for scenario in dataset.scenarios:
+                sid = scenario.scenario_id
+                print(f"  {sid}: seeding...", end=" ", flush=True)
+                user_id = executor.setup(scenario)
+                print("evaluating...", end=" ", flush=True)
+
+                exec_a = executor.evaluate(scenario, user_id, strat_a)
+                sc_a = score_scenario(scenario, exec_a).total_score
+
+                exec_b = executor.evaluate(scenario, user_id, strat_b)
+                sc_b = score_scenario(scenario, exec_b).total_score
+
+                results_a[sid] = sc_a
+                results_b[sid] = sc_b
+                delta = sc_b - sc_a
+                print(f"{strat_a}={sc_a:.1f}  {strat_b}={sc_b:.1f}  delta={delta:+.1f}")
+
+            avg_a = sum(results_a.values()) / len(results_a) if results_a else 0
+            avg_b = sum(results_b.values()) / len(results_b) if results_b else 0
+            print(
+                f"\n  Average: {strat_a}={avg_a:.1f}  {strat_b}={avg_b:.1f}  delta={avg_b - avg_a:+.1f}"
+            )
+        finally:
+            executor.close()
+        return
+
+    try:
+        executions = {}
+        for scenario in dataset.scenarios:
+            print(f"  Running {scenario.scenario_id}: {scenario.title}...", end=" ")
+            execution = executor.execute(scenario)
+            executions[scenario.scenario_id] = execution
+            if execution.error:
+                print(f"ERROR: {execution.error}")
+            else:
+                result = score_scenario(scenario, execution)
+                print(f"{result.total_score:.1f} ({result.grade})")
+    finally:
+        executor.close()
+
+    report = score_dataset(dataset, executions)
+    print(f"\nOverall: {report.overall_score:.1f} ({report.overall_grade})")
+    if report.by_difficulty:
+        print(
+            "  By difficulty:", {k: f"{v:.1f}" for k, v in report.by_difficulty.items()}
+        )
+    if report.by_tag:
+        print("  By tag:", {k: f"{v:.1f}" for k, v in report.by_tag.items()})
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            report.model_dump_json(indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"  Saved: {output_path}")
+
+    if getattr(args, "html", None):
+        from memoria.core.memory.benchmark.report_html import render_html_report
+
+        html_path = Path(args.html)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.write_text(render_html_report(report), encoding="utf-8")
+        print(f"  HTML report: {html_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="memoria",
@@ -288,12 +440,51 @@ def main() -> None:
 
     sub.add_parser("status", help="Show MCP config and rule version status")
     sub.add_parser("update-rules", help="Update steering rules to latest version")
+    p = sub.add_parser(
+        "benchmark", help="Run benchmark against a live Memoria instance"
+    )
+    p.add_argument("dataset", help="Path to benchmark dataset JSON file")
+    p.add_argument("--api-url", help="Memoria API base URL (required for execution)")
+    p.add_argument("--api-token", help="Memoria API token (required for execution)")
+    p.add_argument(
+        "--timeout", type=float, default=30.0, help="HTTP timeout in seconds"
+    )
+    p.add_argument("--output", help="Save report to JSON file")
+    p.add_argument("--html", help="Generate HTML visual report")
+    p.add_argument(
+        "--strategy",
+        help="Force retrieval strategy (e.g. vector:v1, activation:v1) for A/B comparison",
+    )
+    p.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Only validate the dataset file, don't run",
+    )
+    p.add_argument(
+        "--grid-search",
+        action="store_true",
+        help="Run grid search over activation params (requires --strategy activation:v1)",
+    )
+    p.add_argument(
+        "--grid",
+        choices=["fast", "full"],
+        default="fast",
+        dest="grid_level",
+        help="Grid search level: fast (~4 combos, ~10min) or full (~48 combos, ~2h)",
+    )
+    p.add_argument(
+        "--compare",
+        nargs=2,
+        metavar="STRATEGY",
+        help="Compare two strategies on same data (e.g. --compare vector:v1 activation:v1)",
+    )
 
     args = parser.parse_args()
     dispatch = {
         "init": cmd_init,
         "status": cmd_status,
         "update-rules": cmd_update_rules,
+        "benchmark": cmd_benchmark,
     }
     fn = dispatch.get(args.command)
     if fn:

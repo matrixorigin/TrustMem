@@ -137,12 +137,26 @@ class GraphStore(DbConsumer):
             row = db.query(GraphNode).filter_by(node_id=node_id).first()
             return _to_domain(row) if row else None
 
-    def get_nodes_by_ids(self, node_ids: list[str]) -> list[GraphNodeData]:
+    def get_nodes_by_ids(
+        self, node_ids: list[str], *, load_embedding: bool = False
+    ) -> list[GraphNodeData]:
         if not node_ids:
             return []
         with self._db() as db:
-            rows = db.query(GraphNode).filter(GraphNode.node_id.in_(node_ids)).all()
-            return [_to_domain(r) for r in rows]
+            if load_embedding:
+                rows = (
+                    db.query(GraphNode)
+                    .filter(GraphNode.node_id.in_(node_ids), GraphNode.is_active == 1)
+                    .all()
+                )
+                return [_to_domain(r) for r in rows]
+            cols = [c for c in GraphNode.__table__.columns if c.name != "embedding"]
+            rows = (
+                db.query(*cols)
+                .filter(GraphNode.node_id.in_(node_ids), GraphNode.is_active == 1)
+                .all()
+            )
+            return [_row_tuple_to_domain(r) for r in rows]
 
     def get_user_nodes(
         self,
@@ -475,24 +489,47 @@ class GraphStore(DbConsumer):
             db.commit()
 
     def get_outgoing_edges(self, node_id: str) -> list[Edge]:
-        """All outgoing edges from a node."""
+        """All outgoing edges from a node (only to active targets)."""
         with self._db() as db:
-            rows = db.query(GraphEdge).filter_by(source_id=node_id).all()
+            rows = (
+                db.query(GraphEdge)
+                .join(
+                    GraphNode,
+                    (GraphNode.node_id == GraphEdge.target_id)
+                    & (GraphNode.is_active == 1),
+                )
+                .filter(GraphEdge.source_id == node_id)
+                .all()
+            )
             return [Edge(r.target_id, r.edge_type, r.weight) for r in rows]
 
     def get_incoming_edges(self, node_id: str) -> list[Edge]:
-        """All incoming edges to a node."""
+        """All incoming edges to a node (only from active sources)."""
         with self._db() as db:
-            rows = db.query(GraphEdge).filter_by(target_id=node_id).all()
+            rows = (
+                db.query(GraphEdge)
+                .join(
+                    GraphNode,
+                    (GraphNode.node_id == GraphEdge.source_id)
+                    & (GraphNode.is_active == 1),
+                )
+                .filter(GraphEdge.target_id == node_id)
+                .all()
+            )
             return [Edge(r.source_id, r.edge_type, r.weight) for r in rows]
 
     def get_edges_for_nodes(self, node_ids: set[str]) -> dict[str, list[Edge]]:
-        """Batch: all outgoing edges for a set of nodes. Single query."""
+        """Batch: all outgoing edges for a set of nodes (only to active targets)."""
         if not node_ids:
             return {}
         with self._db() as db:
             rows = (
                 db.query(GraphEdge)
+                .join(
+                    GraphNode,
+                    (GraphNode.node_id == GraphEdge.target_id)
+                    & (GraphNode.is_active == 1),
+                )
                 .filter(GraphEdge.source_id.in_(list(node_ids)))
                 .all()
             )
@@ -507,34 +544,70 @@ class GraphStore(DbConsumer):
     ) -> tuple[dict[str, list[Edge]], dict[str, list[Edge]]]:
         """Batch: incoming AND outgoing edges for a set of nodes.
 
-        Two indexed queries (each uses its own index efficiently).
+        Single UNION query — filters out edges to/from inactive nodes.
         Returns (incoming, outgoing).
         """
         if not node_ids:
             return {}, {}
         id_list = list(node_ids)
+        from sqlalchemy import literal, union_all
+
+        incoming: dict[str, list[Edge]] = {nid: [] for nid in node_ids}
+        outgoing: dict[str, list[Edge]] = {nid: [] for nid in node_ids}
+
         with self._db() as db:
-            # Query 1: outgoing (uses PK: source_id leading column)
-            out_rows = (
-                db.query(GraphEdge).filter(GraphEdge.source_id.in_(id_list)).all()
+            out_q = (
+                db.query(
+                    GraphEdge.source_id.label("anchor"),
+                    GraphEdge.target_id.label("peer"),
+                    GraphEdge.edge_type,
+                    GraphEdge.weight,
+                    literal(0).label("direction"),
+                )
+                .join(
+                    GraphNode,
+                    (GraphNode.node_id == GraphEdge.target_id)
+                    & (GraphNode.is_active == 1),
+                )
+                .filter(GraphEdge.source_id.in_(id_list))
             )
-            # Query 2: incoming (uses idx_edge_target)
-            in_rows = db.query(GraphEdge).filter(GraphEdge.target_id.in_(id_list)).all()
-            incoming: dict[str, list[Edge]] = {nid: [] for nid in node_ids}
-            outgoing: dict[str, list[Edge]] = {nid: [] for nid in node_ids}
-            for r in out_rows:
-                outgoing[r.source_id].append(Edge(r.target_id, r.edge_type, r.weight))
-            for r in in_rows:
-                incoming[r.target_id].append(Edge(r.source_id, r.edge_type, r.weight))
-            return incoming, outgoing
+            in_q = (
+                db.query(
+                    GraphEdge.target_id.label("anchor"),
+                    GraphEdge.source_id.label("peer"),
+                    GraphEdge.edge_type,
+                    GraphEdge.weight,
+                    literal(1).label("direction"),
+                )
+                .join(
+                    GraphNode,
+                    (GraphNode.node_id == GraphEdge.source_id)
+                    & (GraphNode.is_active == 1),
+                )
+                .filter(GraphEdge.target_id.in_(id_list))
+            )
+            rows = db.execute(union_all(out_q.statement, in_q.statement)).fetchall()
+
+        for r in rows:
+            edge = Edge(r.peer, r.edge_type, r.weight)
+            if r.direction == 0:
+                outgoing[r.anchor].append(edge)
+            else:
+                incoming[r.anchor].append(edge)
+        return incoming, outgoing
 
     def get_incoming_for_nodes(self, node_ids: set[str]) -> dict[str, list[Edge]]:
-        """Batch: all incoming edges for a set of nodes. Single query."""
+        """Batch: all incoming edges for a set of nodes (only from active sources)."""
         if not node_ids:
             return {}
         with self._db() as db:
             rows = (
                 db.query(GraphEdge)
+                .join(
+                    GraphNode,
+                    (GraphNode.node_id == GraphEdge.source_id)
+                    & (GraphNode.is_active == 1),
+                )
                 .filter(GraphEdge.target_id.in_(list(node_ids)))
                 .all()
             )
@@ -544,21 +617,33 @@ class GraphStore(DbConsumer):
             return result
 
     def get_neighbor_ids(self, node_ids: set[str]) -> set[str]:
-        """All 1-hop neighbor IDs (both directions). Single query."""
+        """All 1-hop active neighbor IDs (both directions), single UNION query."""
         if not node_ids:
             return set()
+        id_list = list(node_ids)
+        from sqlalchemy import union_all
+
         with self._db() as db:
-            out_rows = (
-                db.query(GraphEdge.target_id)
-                .filter(GraphEdge.source_id.in_(list(node_ids)))
-                .all()
+            out_q = (
+                db.query(GraphEdge.target_id.label("neighbor"))
+                .join(
+                    GraphNode,
+                    (GraphNode.node_id == GraphEdge.target_id)
+                    & (GraphNode.is_active == 1),
+                )
+                .filter(GraphEdge.source_id.in_(id_list))
             )
-            in_rows = (
-                db.query(GraphEdge.source_id)
-                .filter(GraphEdge.target_id.in_(list(node_ids)))
-                .all()
+            in_q = (
+                db.query(GraphEdge.source_id.label("neighbor"))
+                .join(
+                    GraphNode,
+                    (GraphNode.node_id == GraphEdge.source_id)
+                    & (GraphNode.is_active == 1),
+                )
+                .filter(GraphEdge.target_id.in_(id_list))
             )
-            return {r[0] for r in out_rows} | {r[0] for r in in_rows}
+            rows = db.execute(union_all(out_q.statement, in_q.statement)).fetchall()
+        return {r[0] for r in rows}
 
     def get_user_edge_count(self, user_id: str) -> int:
         with self._db() as db:
@@ -754,11 +839,21 @@ class GraphStore(DbConsumer):
 
     @staticmethod
     def _upsert_entity_in(
-        db: Session, user_id: str, name: str, display_name: str, entity_type: str
+        db: Session,
+        user_id: str,
+        name: str,
+        display_name: str,
+        entity_type: str,
+        embedding: list[float] | None = None,
     ) -> str:
+        # Exact name match only — soft dedup happens at retrieval time via find_entities_soft
         existing = db.query(Entity).filter_by(user_id=user_id, name=name).first()
         if existing:
+            if embedding and existing.embedding is None:
+                existing.embedding = embedding
+                db.flush()
             return existing.entity_id
+
         entity_id = _new_id()
         db.add(
             Entity(
@@ -767,6 +862,7 @@ class GraphStore(DbConsumer):
                 name=name,
                 display_name=display_name,
                 entity_type=entity_type,
+                embedding=embedding,
             )
         )
         db.flush()
@@ -848,12 +944,44 @@ class GraphStore(DbConsumer):
             return [(r[0], float(r[1])) for r in rows]
 
     def find_entity_by_name(self, user_id: str, name: str) -> str | None:
-        """Find entity_id in mem_entities by exact name match."""
+        """Find entity_id by exact name match."""
         with self._db() as db:
             row = (
                 db.query(Entity.entity_id).filter_by(user_id=user_id, name=name).first()
             )
             return row[0] if row else None
+
+    # Entity types excluded from activation retrieval (kept as metadata only)
+    _NO_ACTIVATION_ENTITY_TYPES = {"time", "person"}
+
+    def find_entities_soft(
+        self,
+        user_id: str,
+        embedding: list[float],
+        top_k: int = 5,
+        threshold: float = 1.0,
+    ) -> list[tuple[str, float]]:
+        """Soft entity linking via embedding similarity.
+
+        Returns [(entity_id, similarity_score)] sorted by relevance.
+        Score is 1/(1+l2_dist), so higher = more similar.
+        Excludes time/person entities from activation.
+        """
+        from matrixone.sqlalchemy_ext import l2_distance
+
+        dist = l2_distance(Entity.embedding, embedding)
+        with self._db() as db:
+            rows = (
+                db.query(Entity.entity_id, dist.label("dist"))
+                .filter(Entity.user_id == user_id)
+                .filter(Entity.embedding.isnot(None))
+                .filter(~Entity.entity_type.in_(self._NO_ACTIVATION_ENTITY_TYPES))
+                .filter(dist < threshold)
+                .order_by(dist)
+                .limit(top_k)
+                .all()
+            )
+            return [(r.entity_id, 1.0 / (1.0 + float(r.dist))) for r in rows]
 
     def get_user_entities(self, user_id: str) -> list[tuple[str, str, str]]:
         """List all entities for a user. Returns [(entity_id, name, entity_type)]."""

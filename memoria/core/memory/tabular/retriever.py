@@ -70,6 +70,7 @@ class _Candidate:
     trust_tier: str = "T3"
     keyword_score: float = 0.0  # Continuous BM25 score from MATCH AGAINST
     l2_dist: Optional[float] = None
+    access_count: int = 0
 
 
 @dataclass
@@ -126,16 +127,14 @@ class MemoryRetriever(DbConsumer):
             task_hint or "default", TASK_WEIGHTS["default"]
         )
 
-        # ── L0: session-scoped working/tool_result (only when explicitly requested) ──
+        # ── L0: session-scoped working/tool_result ──
+        # Always included when session_id is set, unless caller explicitly
+        # requests only non-working types (e.g. memory_types=[semantic]).
         l0_memories: list[Memory] = []
-        if (
-            session_id
-            and memory_types is not None
-            and (
-                MemoryType.WORKING in memory_types
-                or MemoryType.TOOL_RESULT in memory_types
-            )
-        ):
+        caller_excluded_l0 = memory_types is not None and not any(
+            t in memory_types for t in (MemoryType.WORKING, MemoryType.TOOL_RESULT)
+        )
+        if session_id and not caller_excluded_l0:
             l0_memories = self._load_l0(user_id, session_id)
 
         # ── L1: cross-session semantic/procedural/profile (default retrieval) ──
@@ -189,6 +188,9 @@ class MemoryRetriever(DbConsumer):
                 stats.phase1_ms = (time.time() - p1_start) * 1000
 
             if not query_embedding:
+                logger.warning(
+                    "tabular_retriever: query_embedding is None, skipping phase2 vector search"
+                )
                 l1 = [self._to_memory(c, user_id) for c in phase1[:l1_limit]]
                 memories = l0_memories + l1
                 memories = memories[:limit]
@@ -196,6 +198,7 @@ class MemoryRetriever(DbConsumer):
                     self._annotate_scores(phase1[:l1_limit], weights, stats)
                     stats.final_count = len(memories)
                     stats.total_ms = (time.time() - start) * 1000
+                self._bump_access_counts([m.memory_id for m in memories])
                 return memories, stats
 
             # Phase 2
@@ -222,6 +225,9 @@ class MemoryRetriever(DbConsumer):
                 stats.final_count = len(memories)
                 stats.merge_ms = (time.time() - merge_start) * 1000
                 stats.total_ms = (time.time() - start) * 1000
+
+            # Increment access counts for returned memories (fire-and-forget)
+            self._bump_access_counts([m.memory_id for m in memories])
 
             return memories, stats
 
@@ -302,6 +308,7 @@ class MemoryRetriever(DbConsumer):
                 M.observed_at,
                 M.session_id,
                 M.trust_tier,
+                M.access_count,
                 rel,
             ).filter(M.user_id == uid, M.is_active > 0, M.memory_type.in_(type_values))
             if include_cross:
@@ -354,6 +361,7 @@ class MemoryRetriever(DbConsumer):
                             r.session_id,
                             trust_tier=r.trust_tier or "T3",
                             keyword_score=float(r.ft_score or 0.0),
+                            access_count=r.access_count or 0,
                         )
                         for r in rows
                     ], stats
@@ -373,6 +381,7 @@ class MemoryRetriever(DbConsumer):
                 r.observed_at,
                 r.session_id,
                 trust_tier=r.trust_tier or "T3",
+                access_count=r.access_count or 0,
             )
             for r in rows
         ], stats
@@ -405,6 +414,7 @@ class MemoryRetriever(DbConsumer):
                 M.observed_at,
                 M.session_id,
                 M.trust_tier,
+                M.access_count,
                 dist_expr,
             ).filter(
                 M.user_id == uid,
@@ -435,6 +445,7 @@ class MemoryRetriever(DbConsumer):
                     r.session_id,
                     trust_tier=r.trust_tier or "T3",
                     l2_dist=float(r.l2_dist),
+                    access_count=r.access_count or 0,
                 )
                 for r in rows
             ], stats
@@ -474,6 +485,11 @@ class MemoryRetriever(DbConsumer):
             + weights.temporal * time_score
             + weights.confidence * conf_score
         )
+
+        # Frequency boost: log(1 + access_count) — mild boost for frequently retrieved memories
+        if c.access_count > 0:
+            final *= 1.0 + 0.1 * math.log(1 + c.access_count)
+
         return final, vec_score, kw_score, time_score, conf_score
 
     def _annotate_scores(
@@ -562,9 +578,29 @@ class MemoryRetriever(DbConsumer):
             memory_type=MemoryType(c.memory_type),
             content=c.content,
             initial_confidence=c.initial_confidence,
+            access_count=c.access_count,
             session_id=c.session_id,
             observed_at=c.observed_at,
             trust_tier=TrustTier(c.trust_tier)
             if c.trust_tier
             else TrustTier.T3_INFERRED,
         )
+
+    def _bump_access_counts(self, memory_ids: list[str]) -> None:
+        """Increment access_count for retrieved memories (best-effort)."""
+        if not memory_ids:
+            return
+        try:
+            with self._db() as db:
+                placeholders = ",".join(f":id{i}" for i in range(len(memory_ids)))
+                params = {f"id{i}": mid for i, mid in enumerate(memory_ids)}
+                db.execute(
+                    text(
+                        f"UPDATE mem_memories SET access_count = access_count + 1 "
+                        f"WHERE memory_id IN ({placeholders})"
+                    ),
+                    params,
+                )
+                db.commit()
+        except Exception:
+            logger.debug("Failed to bump access counts", exc_info=True)

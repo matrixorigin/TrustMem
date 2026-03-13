@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mo-memoria"
-version = "0.1.8"
+version = "0.1.12"
 description = "Multi-tenant memory service for AI assistants"
 readme = "README.pypi.md"
 requires-python = ">=3.11"
@@ -50,7 +50,7 @@ memoria-mcp = "memoria.mcp_local.server:main"
 include = ["memoria*"]
 
 [tool.setuptools.package-data]
-memoria = ["templates/*.md"]
+memoria = ["templates/*.md", "datasets/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["memoria/tests", "tests"]

@@ -1,6 +1,11 @@
 # Data
 data/
 
+# Benchmark outputs (reports, results) — datasets are tracked
+/tmp/
+benchmark-result*.json
+benchmark-*.html
+
 # Python
 __pycache__/
 *.pyc
@@ -21,3 +26,4 @@ build/
 
 # Kiro local settings (contains personal paths and tokens)
 .kiro/settings/mcp.json
+spacy_models/
