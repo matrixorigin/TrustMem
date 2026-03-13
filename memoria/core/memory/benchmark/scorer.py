@@ -26,21 +26,8 @@ from memoria.core.memory.benchmark.schema import (
 )
 
 
-def _check_assertion(assertion: MemoryAssertion, result: AssertionResult) -> dict:
-    """Check one assertion against its execution result. Returns detail dict."""
-    if result.error:
-        return {
-            "query": assertion.query,
-            "passed": False,
-            "error": result.error,
-            "precision": 0.0,
-            "recall": 0.0,
-            "noise_rejection": 100.0,
-        }
-
-    returned_set = result.returned_contents
-
-    # Recall: how many expected contents appear in results
+def _score_contents(assertion: MemoryAssertion, returned_set: list[str]) -> dict:
+    """Score a set of returned contents against assertion ground truth."""
     hits = sum(
         1
         for expected in assertion.expected_contents
@@ -52,7 +39,6 @@ def _check_assertion(assertion: MemoryAssertion, result: AssertionResult) -> dic
         else 100.0
     )
 
-    # Precision: of returned results, how many contain at least one expected substring
     if returned_set:
         relevant_count = sum(
             1
@@ -63,7 +49,6 @@ def _check_assertion(assertion: MemoryAssertion, result: AssertionResult) -> dic
     else:
         precision = 0.0
 
-    # Noise rejection: excluded contents should NOT appear
     if assertion.excluded_contents:
         noise_hits = sum(
             1
@@ -79,9 +64,7 @@ def _check_assertion(assertion: MemoryAssertion, result: AssertionResult) -> dic
         noise_rejection = 100.0
 
     passed = recall >= 80.0 and noise_rejection >= 80.0
-
     return {
-        "query": assertion.query,
         "passed": passed,
         "recall": round(recall, 2),
         "precision": round(precision, 2),
@@ -91,6 +74,46 @@ def _check_assertion(assertion: MemoryAssertion, result: AssertionResult) -> dic
         "excluded_count": len(assertion.excluded_contents),
         "returned_count": len(returned_set),
     }
+
+
+def _check_assertion(assertion: MemoryAssertion, result: AssertionResult) -> dict:
+    """Check one assertion against its execution result. Returns detail dict.
+
+    If follow-up strategies were executed, each is scored independently.
+    The assertion passes if the base query OR any follow-up strategy passes.
+    The best-scoring variant is used for the final metrics.
+    """
+    if result.error:
+        return {
+            "query": assertion.query,
+            "passed": False,
+            "error": result.error,
+            "precision": 0.0,
+            "recall": 0.0,
+            "noise_rejection": 100.0,
+        }
+
+    # Score base query
+    base = _score_contents(assertion, result.returned_contents)
+    base["query"] = assertion.query
+    base["variant"] = "base"
+
+    # Score each follow-up strategy
+    follow_up_variants = []
+    for fur in result.follow_up_results:
+        v = _score_contents(assertion, fur.returned_contents)
+        v["variant"] = fur.strategy_name
+        v["rounds"] = fur.rounds
+        v["queries_used"] = fur.queries_used
+        follow_up_variants.append(v)
+
+    # Use base query score as the primary result; attach follow-up variants for comparison.
+    # The assertion passes if base OR any follow-up variant passes.
+    all_variants = [base] + follow_up_variants
+    base["passed"] = any(v["passed"] for v in all_variants)
+    if follow_up_variants:
+        base["follow_up_variants"] = follow_up_variants
+    return base
 
 
 def score_scenario(scenario: Scenario, execution: ScenarioExecution) -> ScenarioResult:

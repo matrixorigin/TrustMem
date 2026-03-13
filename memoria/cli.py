@@ -298,10 +298,15 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         f"Dataset: {dataset.dataset_id} {dataset.version} ({len(dataset.scenarios)} scenarios)"
     )
 
+    strategy = getattr(args, "strategy", None)
+    if strategy:
+        print(f"Strategy: {strategy}")
+
     executor = BenchmarkExecutor(
         api_url=api_url,
         api_token=api_token,
         timeout=args.timeout,
+        strategy=strategy,
     )
     try:
         executions = {}
@@ -334,6 +339,14 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
             encoding="utf-8",
         )
         print(f"  Saved: {output_path}")
+
+    if getattr(args, "html", None):
+        from memoria.core.memory.benchmark.report_html import render_html_report
+
+        html_path = Path(args.html)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.write_text(render_html_report(report), encoding="utf-8")
+        print(f"  HTML report: {html_path}")
 
 
 def main() -> None:
@@ -378,6 +391,11 @@ def main() -> None:
         "--timeout", type=float, default=30.0, help="HTTP timeout in seconds"
     )
     p.add_argument("--output", help="Save report to JSON file")
+    p.add_argument("--html", help="Generate HTML visual report")
+    p.add_argument(
+        "--strategy",
+        help="Force retrieval strategy (e.g. vector:v1, activation:v1) for A/B comparison",
+    )
     p.add_argument(
         "--validate-only",
         action="store_true",

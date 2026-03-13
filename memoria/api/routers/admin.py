@@ -124,21 +124,43 @@ def delete_user(
     return {"status": "ok", "user_id": user_id}
 
 
+@router.post("/admin/users/{user_id}/strategy")
+def set_strategy(
+    user_id: str,
+    strategy: str = "vector:v1",
+    _admin: str = Depends(require_admin),
+):
+    """Set retrieval strategy for a user. Used by benchmark to compare strategies."""
+    from memoria.api.database import get_db_factory
+    from memoria.core.memory.factory import switch_user_strategy
+
+    result = switch_user_strategy(get_db_factory(), user_id, strategy)
+    return {
+        "user_id": user_id,
+        "strategy": result.strategy_key,
+        "previous": result.previous_key,
+        "status": result.status,
+    }
+
+
 @router.post("/admin/governance/{user_id}/trigger")
 def admin_trigger_governance(
     user_id: str,
     op: str = "governance",
     _admin: str = Depends(require_admin),
 ):
-    """Admin triggers governance/consolidate/reflect for a user (sync, skips cooldown).
+    """Admin triggers governance/consolidate/reflect/extract_entities for a user.
 
-    TODO: v2 — Redis queue + async worker for distributed deployment.
+    Runs synchronously, skips all cooldowns.
+    Used by benchmark executor for maturation phase.
     """
-    if op not in ("governance", "consolidate", "reflect"):
+    valid_ops = ("governance", "consolidate", "reflect", "extract_entities")
+    if op not in valid_ops:
         from fastapi import HTTPException
 
         raise HTTPException(
-            status_code=400, detail="Invalid op. Must be governance/consolidate/reflect"
+            status_code=400,
+            detail=f"Invalid op. Must be one of: {', '.join(valid_ops)}",
         )
 
     from memoria.api.database import get_db_factory
@@ -154,15 +176,32 @@ def admin_trigger_governance(
             "user_id": user_id,
             "result": {"quarantined": r.quarantined, "cleaned_stale": r.cleaned_stale},
         }
-    else:
-        from memoria.core.memory.factory import create_memory_service
 
-        svc = create_memory_service(db_factory, user_id=user_id)
-        result = svc.consolidate(user_id) if op == "consolidate" else None
-        if op == "reflect":
-            return {
-                "op": op,
-                "user_id": user_id,
-                "result": "reflect requires LLM — use user endpoint",
-            }
+    if op == "extract_entities":
+        from memoria.core.memory.strategy.activation_index import ActivationIndexManager
+
+        mgr = ActivationIndexManager(db_factory)
+        result = mgr.backfill(user_id)
+        return {
+            "op": op,
+            "user_id": user_id,
+            "result": {
+                "processed": result.processed,
+                "skipped": result.skipped,
+                "errors": result.errors[:10],
+            },
+        }
+
+    from memoria.core.memory.factory import create_memory_service
+
+    svc = create_memory_service(db_factory, user_id=user_id)
+    if op == "consolidate":
+        result = svc.consolidate(user_id)
         return {"op": op, "user_id": user_id, "result": result}
+
+    # reflect
+    return {
+        "op": op,
+        "user_id": user_id,
+        "result": "reflect requires LLM — use user endpoint",
+    }

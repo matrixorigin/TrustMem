@@ -61,6 +61,14 @@ class SeedMemory(BaseModel):
     )
 
 
+MaturationOp = Literal[
+    "extract_entities",
+    "consolidate",
+    "governance",
+    "reflect",
+]
+
+
 class ScenarioStep(BaseModel):
     """One action the executor performs against the memory system."""
 
@@ -91,6 +99,25 @@ class ScenarioStep(BaseModel):
         return self
 
 
+class FollowUpStrategy(BaseModel):
+    """Defines how to generate follow-up queries from initial results.
+
+    Simulates agent heuristic behavior: retrieve → inspect → refine → retrieve again.
+    Each strategy is a different "agent personality" that the benchmark evaluates.
+    """
+
+    name: str = Field(min_length=1, description="Strategy name for reporting")
+    description: str = Field(default="")
+    max_rounds: int = Field(default=2, ge=1, le=5)
+    # How to pick follow-up queries from returned results:
+    #   "entity_expand" — extract entity names from results, query each
+    #   "keyword_refine" — combine original query with keywords from results
+    #   "chain" — use each result's content as the next query
+    mode: Literal["entity_expand", "keyword_refine", "chain"] = "entity_expand"
+    # Optional: explicit follow-up queries (overrides mode)
+    follow_up_queries: list[str] = Field(default_factory=list)
+
+
 class MemoryAssertion(BaseModel):
     """What we check after executing the scenario steps."""
 
@@ -105,6 +132,12 @@ class MemoryAssertion(BaseModel):
     excluded_contents: list[str] = Field(
         default_factory=list,
         description="Substrings that must NOT appear in results (noise/outdated)",
+    )
+    # Optional: agent follow-up strategies to evaluate
+    # Each strategy produces a separate score; the assertion passes if ANY strategy passes
+    follow_ups: list[FollowUpStrategy] = Field(
+        default_factory=list,
+        description="Agent heuristic strategies to try. Scored independently.",
     )
 
 
@@ -121,6 +154,11 @@ class Scenario(BaseModel):
     # The actual data
     seed_memories: list[SeedMemory] = Field(
         min_length=1, description="Pre-loaded memories before steps run"
+    )
+    maturation: list[MaturationOp] = Field(
+        default_factory=list,
+        description="Post-seed backend ops to run before steps/assertions "
+        "(e.g. extract_entities, consolidate). Executed in order.",
     )
     steps: list[ScenarioStep] = Field(
         default_factory=list, description="Actions to perform (store, correct, etc.)"

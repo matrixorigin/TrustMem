@@ -3,7 +3,7 @@
 import hmac
 from datetime import datetime, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import update
 from sqlalchemy.orm import Session
@@ -18,16 +18,29 @@ security = HTTPBearer()
 ADMIN_USER_ID = "__admin__"
 
 
+def _is_master_key(token: str) -> bool:
+    """Check if token is the master key (timing-safe)."""
+    settings = get_settings()
+    return bool(settings.master_key and hmac.compare_digest(token, settings.master_key))
+
+
 def get_current_user_id(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db_session),
 ) -> str:
-    """Authenticate via API key, return user_id."""
-    token = credentials.credentials
-    settings = get_settings()
+    """Authenticate via API key, return user_id.
 
-    # Master key → admin user (timing-safe comparison)
-    if settings.master_key and hmac.compare_digest(token, settings.master_key):
+    Admin (master key) can impersonate a specific user via the
+    ``X-Impersonate-User`` header.  Only master-key holders can use this;
+    regular API keys ignore the header entirely.
+    """
+    token = credentials.credentials
+
+    if _is_master_key(token):
+        impersonate = request.headers.get("X-Impersonate-User")
+        if impersonate:
+            return impersonate
         return ADMIN_USER_ID
 
     key_hash = ApiKey.hash_key(token)
@@ -55,7 +68,6 @@ def get_current_user_id(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="API key expired"
             )
 
-    # Update last_used_at
     try:
         db.execute(
             update(ApiKey)
@@ -69,10 +81,17 @@ def get_current_user_id(
     return row.user_id
 
 
-def require_admin(user_id: str = Depends(get_current_user_id)) -> str:
-    """Require admin (master key) access."""
-    if user_id != ADMIN_USER_ID:
+def require_admin(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> str:
+    """Require admin (master key) access.
+
+    Checks the raw token, NOT the impersonated user_id.
+    This ensures admin endpoints remain accessible even when
+    X-Impersonate-User is set.
+    """
+    if not _is_master_key(credentials.credentials):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
         )
-    return user_id
+    return ADMIN_USER_ID
