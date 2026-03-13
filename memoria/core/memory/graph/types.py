@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 class NodeType(str, enum.Enum):
@@ -78,4 +79,4 @@ class GraphNodeData:
 
     is_active: bool = True
     superseded_by: str | None = None
-    created_at: str | None = None
+    created_at: datetime | None = None

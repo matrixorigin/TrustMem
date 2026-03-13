@@ -263,7 +263,8 @@ class GraphBuilder:
                 source_nodes=mem.source_event_ids if is_scene else [],
                 # Inherit observed_at from memory so temporal decay works correctly
                 # for backdated memories (e.g. benchmark age_days seeds).
-                created_at=str(mem.observed_at) if mem.observed_at else None,
+                # DateTime6 type decorator handles timezone stripping automatically.
+                created_at=mem.observed_at,
             )
             new_nodes.append(node)
             nodes.append(node)

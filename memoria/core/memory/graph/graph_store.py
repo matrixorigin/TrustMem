@@ -44,7 +44,7 @@ def _to_domain(row: GraphNode) -> GraphNodeData:
         cross_session_count=row.cross_session_count or 0,
         is_active=bool(row.is_active),
         superseded_by=row.superseded_by,
-        created_at=str(row.created_at) if row.created_at else None,
+        created_at=row.created_at,
     )
 
 
@@ -71,7 +71,7 @@ def _row_tuple_to_domain(row) -> GraphNodeData:
         cross_session_count=getattr(row, "cross_session_count", 0) or 0,
         is_active=bool(row.is_active),
         superseded_by=getattr(row, "superseded_by", None),
-        created_at=str(row.created_at) if getattr(row, "created_at", None) else None,
+        created_at=getattr(row, "created_at", None),
     )
 
 
@@ -100,7 +100,6 @@ def _to_row(node: GraphNodeData) -> dict:
         "is_active": 1 if node.is_active else 0,
         "superseded_by": node.superseded_by,
     }
-    # Allow backdating graph nodes to match memory observed_at (e.g. for age_days seeds)
     if node.created_at is not None:
         row["created_at"] = node.created_at
     return row

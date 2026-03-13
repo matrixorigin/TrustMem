@@ -4,6 +4,7 @@ Self-contained so the memory module has no dependency on api/ layer.
 """
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import JSON as _SA_JSON
@@ -15,13 +16,25 @@ EMBEDDING_DIM = int(os.environ.get("EMBEDDING_DIM") or "1024")
 
 
 class DateTime6(TypeDecorator):
-    """Microsecond-precision DATETIME for MatrixOne."""
+    """Microsecond-precision DATETIME for MatrixOne.
+
+    Automatically strips timezone info before writing to DB,
+    since MatrixOne does not accept ISO 8601 timezone suffixes.
+    """
 
     impl = _SA_DateTime
     cache_ok = True
 
     def get_col_spec(self, **kw: Any) -> str:
         return "DATETIME(6)"
+
+    def process_bind_param(self, value: Any | None, dialect: Dialect) -> Any | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            if value.tzinfo is not None:
+                value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
 
 
 class NullableJSON(TypeDecorator):

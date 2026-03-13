@@ -1286,3 +1286,87 @@ class TestLLMEntityExtractorUnit:
         assert len(result) == 2
         assert result[0].name == "python"
         assert result[1].name == "fastapi"
+
+
+class TestGraphBuilderTimezone:
+    """GraphBuilder.ingest with timezone-aware observed_at."""
+
+    def test_ingest_with_timezone_aware_observed_at(self, store, user_id):
+        """Memory with timezone-aware observed_at → graph node created_at without TZ suffix."""
+        from datetime import datetime, timedelta, timezone
+
+        from memoria.core.memory.graph.graph_builder import GraphBuilder
+        from memoria.core.memory.graph.types import NodeType
+        from memoria.core.memory.types import Memory, MemoryType, TrustTier
+
+        builder = GraphBuilder(store, embed_fn=lambda x: _embed())
+
+        # Create memory with timezone-aware observed_at (simulates benchmark age_days)
+        observed = datetime.now(timezone.utc) - timedelta(days=30)
+        mem = Memory(
+            memory_id=uuid4().hex,
+            user_id=user_id,
+            memory_type=MemoryType.SEMANTIC,
+            content="Timezone test memory",
+            embedding=_embed(0.5),
+            initial_confidence=0.9,
+            trust_tier=TrustTier.T3_INFERRED,
+            observed_at=observed,
+        )
+
+        # Ingest should not raise
+        created = builder.ingest(user_id, [mem], [])
+        assert len(created) >= 1
+
+        # Verify node was created with correct created_at
+        semantic_nodes = [n for n in created if n.node_type == NodeType.SEMANTIC]
+        assert len(semantic_nodes) == 1
+
+        node = semantic_nodes[0]
+        assert node.created_at is not None
+
+        # Verify the node can be read back from DB
+        fetched = store.get_node(node.node_id)
+        assert fetched is not None
+        assert fetched.created_at is not None
+
+        # Verify created_at matches observed_at (within 1 second tolerance)
+        expected = observed.replace(tzinfo=None)
+        actual = (
+            fetched.created_at.replace(tzinfo=None)
+            if fetched.created_at.tzinfo
+            else fetched.created_at
+        )
+        diff = abs((actual - expected).total_seconds())
+        assert diff < 1.0, f"created_at mismatch: expected {expected}, got {actual}"
+
+    def test_ingest_with_naive_observed_at(self, store, user_id):
+        """Memory with naive observed_at → graph node created_at works correctly."""
+        from datetime import datetime, timedelta, timezone
+
+        from memoria.core.memory.graph.graph_builder import GraphBuilder
+        from memoria.core.memory.graph.types import NodeType
+        from memoria.core.memory.types import Memory, MemoryType, TrustTier
+
+        builder = GraphBuilder(store, embed_fn=lambda x: _embed())
+
+        # Create memory with naive datetime
+        observed = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=15)
+        mem = Memory(
+            memory_id=uuid4().hex,
+            user_id=user_id,
+            memory_type=MemoryType.SEMANTIC,
+            content="Naive datetime test",
+            embedding=_embed(0.6),
+            initial_confidence=0.8,
+            trust_tier=TrustTier.T3_INFERRED,
+            observed_at=observed,
+        )
+
+        created = builder.ingest(user_id, [mem], [])
+        semantic_nodes = [n for n in created if n.node_type == NodeType.SEMANTIC]
+        assert len(semantic_nodes) == 1
+
+        fetched = store.get_node(semantic_nodes[0].node_id)
+        assert fetched is not None
+        assert fetched.created_at is not None
