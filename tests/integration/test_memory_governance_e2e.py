@@ -320,3 +320,119 @@ class TestFullCycle:
         # Snapshot cleanup may fail due to MO catalog schema differences — tolerate
         non_snapshot_errors = [e for e in result.errors if "snapshot" not in e.lower()]
         assert len(non_snapshot_errors) == 0
+
+
+class TestGovernanceAuditLog:
+    """Verify governance operations write correct audit records to mem_edit_log."""
+
+    def _get_edit_log(self, db_factory, user_id: str, operation: str) -> list:
+        from sqlalchemy import text
+        import json
+
+        db = db_factory()
+        try:
+            rows = db.execute(
+                text(
+                    "SELECT operation, target_ids, reason FROM mem_edit_log "
+                    "WHERE user_id = :uid AND operation = :op "
+                    "ORDER BY created_at DESC LIMIT 10"
+                ),
+                {"uid": user_id, "op": operation},
+            ).fetchall()
+            return [
+                {
+                    "operation": r.operation,
+                    "target_ids": json.loads(r.target_ids) if r.target_ids else [],
+                    "reason": r.reason,
+                }
+                for r in rows
+            ]
+        finally:
+            db.close()
+
+    def _cleanup_edit_log(self, db_factory, user_id: str) -> None:
+        from sqlalchemy import text
+
+        db = db_factory()
+        try:
+            db.execute(
+                text("DELETE FROM mem_edit_log WHERE user_id = :uid"),
+                {"uid": user_id},
+            )
+            db.commit()
+        finally:
+            db.close()
+
+    def test_archive_working_writes_edit_log(self, db_factory, cleanup):
+        """_archive_stale_working writes governance:archive_working to edit_log."""
+        store = MemoryStore(db_factory)
+        user_id = _uid()
+
+        mem = Memory(
+            memory_id=str(uuid7()),
+            user_id=user_id,
+            memory_type=MemoryType.WORKING,
+            content="stale working memory",
+            initial_confidence=0.9,
+            observed_at=datetime.now(timezone.utc) - timedelta(hours=4),
+        )
+        cleanup.append(mem.memory_id)
+        store.create(mem)
+
+        config = MemoryGovernanceConfig(
+            working_memory_stale_hours=2, tool_result_ttl_hours=999
+        )
+        scheduler = GovernanceScheduler(db_factory, config=config)
+        scheduler.run_hourly()
+
+        logs = self._get_edit_log(db_factory, user_id, "governance:archive_working")
+        self._cleanup_edit_log(db_factory, user_id)
+
+        assert len(logs) == 1
+        assert mem.memory_id in logs[0]["target_ids"]
+        assert "archived" in logs[0]["reason"].lower()
+
+    def test_quarantine_writes_edit_log(self, db_factory, cleanup):
+        """_quarantine_low_confidence writes governance:quarantine to edit_log."""
+        store = MemoryStore(db_factory)
+        user_id = _uid()
+
+        # T4 memory 90 days old → effective_confidence ≈ 0.05 (below default threshold 0.1)
+        mem = Memory(
+            memory_id=str(uuid7()),
+            user_id=user_id,
+            memory_type=MemoryType.SEMANTIC,
+            content="very old low confidence memory",
+            initial_confidence=0.3,
+            trust_tier=TrustTier.T4_UNVERIFIED,
+            observed_at=datetime.now(timezone.utc) - timedelta(days=90),
+        )
+        cleanup.append(mem.memory_id)
+        store.create(mem)
+
+        config = MemoryGovernanceConfig(quarantine_threshold=0.1)
+        scheduler = GovernanceScheduler(db_factory, config=config)
+        scheduler.run_daily(user_id)
+
+        logs = self._get_edit_log(db_factory, user_id, "governance:quarantine")
+        self._cleanup_edit_log(db_factory, user_id)
+
+        assert len(logs) >= 1
+        all_ids = [mid for log in logs for mid in log["target_ids"]]
+        assert mem.memory_id in all_ids
+        assert "quarantine" in logs[0]["reason"].lower()
+
+    def test_no_edit_log_when_nothing_deactivated(self, db_factory):
+        """No edit_log entry written when governance finds nothing to deactivate."""
+        user_id = _uid()
+        config = MemoryGovernanceConfig(
+            working_memory_stale_hours=9999, tool_result_ttl_hours=9999,
+            quarantine_threshold=0.0,
+        )
+        scheduler = GovernanceScheduler(db_factory, config=config)
+        scheduler.run_hourly()
+        scheduler.run_daily(user_id)
+
+        logs = self._get_edit_log(db_factory, user_id, "governance:archive_working")
+        logs += self._get_edit_log(db_factory, user_id, "governance:quarantine")
+        assert len(logs) == 0

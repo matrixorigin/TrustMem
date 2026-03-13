@@ -97,7 +97,7 @@ def _ddl_statements(dim: int) -> list[str]:
         CREATE TABLE IF NOT EXISTS `mem_edit_log` (
           `edit_id`         VARCHAR(36)  NOT NULL,
           `user_id`         VARCHAR(64)  NOT NULL,
-          `operation`       VARCHAR(20)  NOT NULL,
+          `operation`       VARCHAR(64)  NOT NULL,
           `target_ids`      JSON         DEFAULT NULL,
           `reason`          TEXT         DEFAULT NULL,
           `snapshot_before` VARCHAR(64)  DEFAULT NULL,
