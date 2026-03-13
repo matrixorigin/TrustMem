@@ -22,6 +22,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _apply_post_filters(
+    memories: list[Memory],
+    *,
+    memory_types: list[MemoryType] | None = None,
+    session_id: str = "",
+    include_cross_session: bool = True,
+) -> list[Memory]:
+    """Apply memory_types / session / cross-session filters to graph results."""
+    result = memories
+    if memory_types:
+        allowed = set(memory_types)
+        result = [m for m in result if m.memory_type in allowed]
+    if session_id and not include_cross_session:
+        result = [m for m in result if m.session_id == session_id]
+    return result
+
+
 # NodeType → MemoryType: preserve original type from graph node
 _NODE_TO_MEMORY: dict[str, MemoryType] = {
     "episodic": MemoryType.WORKING,
@@ -90,6 +108,12 @@ class ActivationRetrievalStrategy:
                 )
                 if activated:
                     memories = self._nodes_to_memories(activated, user_id)
+                    memories = _apply_post_filters(
+                        memories,
+                        memory_types=memory_types,
+                        session_id=session_id,
+                        include_cross_session=include_cross_session,
+                    )
                     logger.info(
                         "activation:v1 graph path — user=%s results=%d",
                         user_id,

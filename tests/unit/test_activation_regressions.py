@@ -254,6 +254,134 @@ class TestSoftEntityLinkingFilter:
         assert "mem1" in mids
 
 
+# ── 4b. Graph path must apply memory_types/session/cross-session filters ──
+
+
+class TestGraphPathFilterConsistency:
+    """activation:v1 graph path must apply the same memory_types / session_id /
+    include_cross_session filters that the vector fallback applies.
+
+    Bug: when graph retrieval succeeds, _nodes_to_memories returned unfiltered
+    results — memory_types, session_id, include_cross_session were ignored.
+    """
+
+    def _make_strategy(self, graph_results, tabular_map):
+        from memoria.core.memory.strategy.activation_v1 import (
+            ActivationRetrievalStrategy,
+        )
+
+        strategy = ActivationRetrievalStrategy.__new__(ActivationRetrievalStrategy)
+        strategy._activation_retriever = MagicMock()
+        strategy._activation_retriever.retrieve.return_value = graph_results
+        strategy._mem_store = MagicMock()
+        strategy._mem_store.get_by_ids.return_value = tabular_map
+        strategy._vector_fallback_strategy = None
+        strategy._config = None
+        strategy._metrics = None
+        strategy._db_factory = MagicMock()
+        return strategy
+
+    def test_memory_types_filter_applied(self):
+        """Graph path should filter out memories whose type is not in memory_types."""
+        mem_semantic = Memory(
+            memory_id="m1", user_id="u1", memory_type=MemoryType.SEMANTIC,
+            content="semantic fact",
+        )
+        mem_working = Memory(
+            memory_id="m2", user_id="u1", memory_type=MemoryType.WORKING,
+            content="working note",
+        )
+        tabular = {"m1": mem_semantic, "m2": mem_working}
+        nodes = [
+            (_make_node("semantic fact", memory_id="m1"), 0.9),
+            (_make_node("working note", node_type=NodeType.EPISODIC, memory_id="m2"), 0.8),
+        ]
+        strategy = self._make_strategy(nodes, tabular)
+
+        results, _ = strategy.retrieve(
+            "u1", "test", [0.1] * 10,
+            memory_types=[MemoryType.SEMANTIC],
+        )
+        types = {m.memory_type for m in results}
+        assert MemoryType.WORKING not in types
+        assert MemoryType.SEMANTIC in types
+
+    def test_session_filter_excludes_other_sessions(self):
+        """Graph path with include_cross_session=False should only return
+        memories from the requested session."""
+        mem_same = Memory(
+            memory_id="m1", user_id="u1", memory_type=MemoryType.SEMANTIC,
+            content="same session", session_id="sess-A",
+        )
+        mem_other = Memory(
+            memory_id="m2", user_id="u1", memory_type=MemoryType.SEMANTIC,
+            content="other session", session_id="sess-B",
+        )
+        tabular = {"m1": mem_same, "m2": mem_other}
+        nodes = [
+            (_make_node("same session", memory_id="m1"), 0.9),
+            (_make_node("other session", memory_id="m2"), 0.8),
+        ]
+        strategy = self._make_strategy(nodes, tabular)
+
+        results, _ = strategy.retrieve(
+            "u1", "test", [0.1] * 10,
+            session_id="sess-A",
+            include_cross_session=False,
+        )
+        assert len(results) == 1
+        assert results[0].session_id == "sess-A"
+
+    def test_cross_session_true_returns_all(self):
+        """Graph path with include_cross_session=True returns all sessions."""
+        mem_a = Memory(
+            memory_id="m1", user_id="u1", memory_type=MemoryType.SEMANTIC,
+            content="session A", session_id="sess-A",
+        )
+        mem_b = Memory(
+            memory_id="m2", user_id="u1", memory_type=MemoryType.SEMANTIC,
+            content="session B", session_id="sess-B",
+        )
+        tabular = {"m1": mem_a, "m2": mem_b}
+        nodes = [
+            (_make_node("session A", memory_id="m1"), 0.9),
+            (_make_node("session B", memory_id="m2"), 0.8),
+        ]
+        strategy = self._make_strategy(nodes, tabular)
+
+        results, _ = strategy.retrieve(
+            "u1", "test", [0.1] * 10,
+            session_id="sess-A",
+            include_cross_session=True,
+        )
+        assert len(results) == 2
+
+    def test_vector_fallback_passes_all_filters(self):
+        """Vector fallback must receive memory_types, session_id,
+        include_cross_session — regression guard for existing correct behavior."""
+        from memoria.core.memory.strategy.activation_v1 import (
+            ActivationRetrievalStrategy,
+        )
+
+        strategy = ActivationRetrievalStrategy.__new__(ActivationRetrievalStrategy)
+        strategy._activation_retriever = MagicMock()
+        strategy._activation_retriever.retrieve.return_value = []  # force fallback
+        strategy._vector_fallback_strategy = MagicMock()
+        strategy._vector_fallback_strategy.retrieve.return_value = ([], None)
+
+        strategy.retrieve(
+            "u1", "test", [0.1] * 10,
+            memory_types=[MemoryType.SEMANTIC],
+            session_id="sess-X",
+            include_cross_session=False,
+        )
+
+        call_kwargs = strategy._vector_fallback_strategy.retrieve.call_args.kwargs
+        assert call_kwargs["memory_types"] == [MemoryType.SEMANTIC]
+        assert call_kwargs["session_id"] == "sess-X"
+        assert call_kwargs["include_cross_session"] is False
+
+
 # ── 5. Fallback warning logs ─────────────────────────────────────────
 
 
