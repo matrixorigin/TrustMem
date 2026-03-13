@@ -30,7 +30,7 @@ services:
       # Debug HTTP port (pprof) — disabled by default, set MATRIXONE_DEBUG_PORT to enable
       - "${MATRIXONE_DEBUG_PORT:-}:6060"
     volumes:
-      - ${MATRIXONE_DATA_DIR:-mo-data}:/mo-data
+      - ${MATRIXONE_DATA_DIR:-./data/matrixone}:/mo-data
     environment:
       - TZ=Asia/Shanghai
     networks:
