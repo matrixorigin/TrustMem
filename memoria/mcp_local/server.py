@@ -405,6 +405,7 @@ class EmbeddedBackend(MemoryBackend):
     def _with_cooldown(
         self, user_id: str, op: str, fn: Any, force: bool = False
     ) -> dict:
+        import copy
         import time
 
         key = (user_id, op)
@@ -415,12 +416,12 @@ class EmbeddedBackend(MemoryBackend):
                 ts, result = cached
                 remaining = self._COOLDOWN_SECONDS[op] - (now - ts)
                 if remaining > 0:
-                    result_copy = dict(result)
+                    result_copy = copy.deepcopy(result)
                     result_copy["skipped"] = True
                     result_copy["cooldown_remaining_s"] = int(remaining)
                     return result_copy
         result = fn()
-        self._cooldown_cache[key] = (now, result)
+        self._cooldown_cache[key] = (now, copy.deepcopy(result))
         return result
 
     def governance(self, user_id: str, force: bool = False) -> dict:

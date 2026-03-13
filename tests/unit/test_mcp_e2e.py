@@ -30,6 +30,28 @@ class FakeBackend(MemoryBackend):
         self._snapshots: dict[str, dict] = {}  # name → info
         self._branches: dict[str, dict] = {}  # name → info
         self._active_branch: str = "main"
+        self._cooldown_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+
+    def _with_cooldown(self, user_id: str, op: str, fn, force: bool = False) -> dict:
+        """Cooldown cache with deep copy to prevent pollution."""
+        import copy
+        import time
+
+        key = (user_id, op)
+        now = time.time()
+        if not force:
+            cached = self._cooldown_cache.get(key)
+            if cached:
+                ts, result = cached
+                remaining = 3600 - (now - ts)  # 1h cooldown
+                if remaining > 0:
+                    result_copy = copy.deepcopy(result)
+                    result_copy["skipped"] = True
+                    result_copy["cooldown_remaining_s"] = int(remaining)
+                    return result_copy
+        result = fn()
+        self._cooldown_cache[key] = (now, copy.deepcopy(result))
+        return result
 
     # ── CRUD ──────────────────────────────────────────────────────────
 
@@ -554,3 +576,52 @@ async def test_capabilities(server):
     assert "memory_governance" in data["tools"]
     assert "memory_branch" in data["tools"]
     assert "memory_capabilities" in data["tools"]
+
+
+@pytest.mark.asyncio
+async def test_cooldown_cache_not_polluted(server, backend):
+    """Verify that handler mutations (e.g., pop) don't pollute the cooldown cache.
+
+    Regression test for: governance handler calls result.pop("vector_index_health")
+    which was modifying the cached object. Second call would lose vector_index_health.
+    """
+    # Test _with_cooldown directly with a mock function that returns a dict
+    # with nested structure (like governance result)
+
+    call_count = 0
+
+    def mock_fn():
+        nonlocal call_count
+        call_count += 1
+        return {
+            "quarantined": 1,
+            "cleaned_stale": 2,
+            "vector_index_health": {"mem_memories": {"needs_rebuild": True}},
+        }
+
+    # First call — should execute fn and cache result
+    result1 = backend._with_cooldown("test_user", "governance", mock_fn)
+    assert call_count == 1
+    assert "vector_index_health" in result1
+
+    # Simulate what the handler does: pop vector_index_health
+    health = result1.pop("vector_index_health", {})
+    assert health == {"mem_memories": {"needs_rebuild": True}}
+    assert "vector_index_health" not in result1  # Handler removed it
+
+    # Second call within cooldown — should return cached copy
+    result2 = backend._with_cooldown("test_user", "governance", mock_fn)
+    assert call_count == 1  # fn not called again (still in cooldown)
+    assert result2.get("skipped") is True
+    assert "cooldown_remaining_s" in result2
+
+    # CRITICAL: Cached result should still have vector_index_health
+    # (not polluted by the pop() we did on result1)
+    key = ("test_user", "governance")
+    ts, cached_result = backend._cooldown_cache[key]
+    assert "vector_index_health" in cached_result, (
+        "Cache was polluted: vector_index_health was removed by handler's pop()"
+    )
+    assert cached_result["vector_index_health"] == {
+        "mem_memories": {"needs_rebuild": True}
+    }

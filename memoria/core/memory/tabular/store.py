@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import uuid
 
+from sqlalchemy import text
+
 from memoria.core.memory.models.memory import MemoryRecord
 from memoria.core.db_consumer import DbConsumer, DbFactory
 from memoria.core.memory.tabular.metrics import MemoryMetrics, Timer
@@ -223,6 +225,13 @@ class MemoryStore(DbConsumer):
                     "superseded_by": new_memory.memory_id,
                     "updated_at": now,
                 }
+            )
+            # Sync: deactivate graph node whose backing memory was superseded
+            db.execute(
+                text(
+                    "UPDATE memory_graph_nodes SET is_active = 0 WHERE memory_id = :mid"
+                ),
+                {"mid": old_id},
             )
 
             row = MemoryRecord(
