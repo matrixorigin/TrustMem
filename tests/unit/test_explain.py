@@ -25,6 +25,34 @@ class TestExplainLevel:
         assert ExplainLevel.ANALYZE.value == "analyze"
 
 
+class TestExplainInit:
+    """Test init_explain with various input types."""
+
+    def test_init_with_bool_false(self):
+        """Test that False is treated as 'none'."""
+        ctx = init_explain(False)  # type: ignore
+        assert ctx is None
+
+    def test_init_with_bool_true(self):
+        """Test that True is treated as 'basic'."""
+        ctx = init_explain(True)  # type: ignore
+        assert ctx is not None
+        assert ctx.level == ExplainLevel.BASIC
+        clear_explain()
+
+    def test_init_with_string_none(self):
+        """Test that 'none' returns None."""
+        ctx = init_explain("none")
+        assert ctx is None
+
+    def test_init_with_string_basic(self):
+        """Test that 'basic' creates context."""
+        ctx = init_explain("basic")
+        assert ctx is not None
+        assert ctx.level == ExplainLevel.BASIC
+        clear_explain()
+
+
 class TestExplainContext:
     """Test ExplainContext functionality."""
 

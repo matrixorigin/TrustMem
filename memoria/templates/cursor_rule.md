@@ -1,4 +1,4 @@
-<!-- memoria-version: 0.1.17-->
+<!-- memoria-version: 0.1.18-->
 
 # Memory Integration (Memoria Lite)
 
@@ -67,9 +67,11 @@ Before storing a new memory, consider:
 ### Read tools
 | Tool | When to use | Key params |
 |------|-------------|------------|
-| `memory_retrieve` | Conversation start, or when context is needed | `query`, `top_k` (default 5), `session_id` (optional) |
-| `memory_search` | User asks "what do you know about X" or you need to browse | `query`, `top_k` (default 10). Returns memory_id for each result |
+| `memory_retrieve` | Conversation start, or when context is needed | `query`, `top_k` (default 5), `session_id` (optional), `explain` (false = no debug, true = show timing) |
+| `memory_search` | User asks "what do you know about X" or you need to browse | `query`, `top_k` (default 10), `explain` (false = no debug, true = show timing) |
 | `memory_profile` | User asks "what do you know about me" | — |
+
+**Debug parameter:** `explain=true` shows execution timing and retrieval path. Use when debugging query issues.
 
 ### Memory types
 | Type | Use for | Examples |

@@ -347,3 +347,58 @@ async def test_link_entities_json_schema(server, backend):
     assert data["status"] == "done"
     for key in ("entities_created", "entities_reused", "edges_created"):
         assert isinstance(data[key], int)
+
+
+# ── Explain Parameter Tests ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_retrieve_explain_bool_false(server, backend):
+    """Test that explain=False works (no explain output)."""
+    backend.store("test_user", "test content", "semantic", None)
+    result = await call(server, "memory_retrieve", query="test", explain=False)
+    # Should not contain explain output
+    assert "Explain:" not in result
+    assert "execution path" not in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_explain_bool_true(server, backend):
+    """Test that explain=True works (basic explain output)."""
+    backend.store("test_user", "test content", "semantic", None)
+    result = await call(server, "memory_retrieve", query="test", explain=True)
+    # Should contain explain output (format: [explain] total=X.Xms path=...)
+    assert "[explain]" in result
+    assert "total=" in result
+    assert "ms" in result
+
+
+@pytest.mark.asyncio
+async def test_search_explain_bool_false(server, backend):
+    """Test that explain=False works for search."""
+    backend.store("test_user", "test content", "semantic", None)
+    result = await call(server, "memory_search", query="test", explain=False)
+    assert "[explain]" not in result
+
+
+@pytest.mark.asyncio
+async def test_search_explain_bool_true(server, backend):
+    """Test that explain=True works for search."""
+    backend.store("test_user", "test content", "semantic", None)
+    result = await call(server, "memory_search", query="test", explain=True)
+    assert "[explain]" in result
+    assert "total=" in result
+
+
+@pytest.mark.asyncio
+async def test_retrieve_explain_string_values(server, backend):
+    """Test that string values still work (backward compatibility)."""
+    backend.store("test_user", "test content", "semantic", None)
+
+    # Test "none"
+    result = await call(server, "memory_retrieve", query="test", explain="none")
+    assert "[explain]" not in result
+
+    # Test "basic"
+    result = await call(server, "memory_retrieve", query="test", explain="basic")
+    assert "[explain]" in result

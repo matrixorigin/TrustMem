@@ -102,7 +102,7 @@ Hybrid retrieval: vector similarity + fulltext search, ranked by relevance.
 | `memory_types` | No | all | Filter by types |
 | `session_id` | No | — | Prioritize session memories |
 | `include_cross_session` | No | true | Include other sessions |
-| `explain` | No | "none" | Debug level: "none" (default, no overhead), "basic" (execution path + timing), "verbose" (detailed metrics), "analyze" (full diagnostics). Use for performance debugging only. |
+| `explain` | No | false | `false` = no debug, `true` = show timing, `"verbose"` = detailed metrics, `"analyze"` = full diagnostics |
 
 ### Search Memories
 
@@ -122,7 +122,7 @@ POST /v1/memories/search
 |-------|----------|---------|-------------|
 | `query` | Yes | — | Search query |
 | `top_k` | No | 10 | Max results (1–100) |
-| `explain` | No | "none" | Debug level: "none" (default), "basic" (execution path + timing), "verbose" (detailed metrics). Use for performance debugging only. |
+| `explain` | No | false | `false` = no debug, `true` = show timing, `"verbose"` = detailed metrics |
 
 Same as retrieve but without session prioritization.
 

@@ -1854,7 +1854,7 @@ def create_server(backend: MemoryBackend, default_user: str = "default") -> Fast
         user_id: str | None = None,
         session_id: str | None = None,
         format: str = "text",
-        explain: str = "none",
+        explain: bool | str = "none",
     ) -> str:
         """Retrieve relevant memories for a query. Call this at conversation start or when context is needed.
 
@@ -1862,20 +1862,16 @@ def create_server(backend: MemoryBackend, default_user: str = "default") -> Fast
             query: What to search for in memories.
             top_k: Max number of memories to return (default 5).
             user_id: User ID (optional).
-            session_id: Session context (optional). When set, prioritizes memories from this session.
-                When None, searches across all sessions (include_cross_session=True).
-                When set, the underlying retrieval strategy ranks session-scoped memories higher.
-            format: 'text' (default) or 'json' for structured response with memory_id, type, content, score per item.
-            explain: Debug/performance analysis level (default 'none'). Use 'basic' to see execution path
-                and timing when debugging slow queries. 'verbose' adds detailed metrics. 'analyze' includes
-                internal diagnostics. Only use when explicitly debugging - adds overhead.
+            session_id: Session context (optional). When set, prioritizes this session's memories.
+            format: 'text' (default) or 'json' for structured response.
+            explain: false (default) = no debug, true = show timing and retrieval path, 'verbose' = detailed metrics, 'analyze' = full diagnostics. Use when debugging query issues.
         """
         from memoria.core.explain import init_explain, clear_explain
 
         uid = _user(user_id)
         top_k = max(1, min(top_k, 100))
 
-        # Initialize explain context
+        # Initialize explain context (handles bool → str conversion internally)
         explain_ctx = init_explain(explain)
 
         try:
@@ -2068,7 +2064,7 @@ def create_server(backend: MemoryBackend, default_user: str = "default") -> Fast
         top_k: int = 10,
         user_id: str | None = None,
         format: str = "text",
-        explain: str = "none",
+        explain: bool | str = "none",
     ) -> str:
         """Semantic search over all memories.
 
@@ -2076,13 +2072,12 @@ def create_server(backend: MemoryBackend, default_user: str = "default") -> Fast
             query: Search query.
             top_k: Max results (default 10).
             user_id: User ID (optional).
-            format: 'text' (default) or 'json' for structured response with memory_id, type, content per item.
-            explain: Debug/performance analysis level (default 'none'). Use 'basic' to see execution path
-                and timing when debugging slow queries. Only use when explicitly debugging - adds overhead.
+            format: 'text' (default) or 'json' for structured response.
+            explain: false (default) = no debug, true = show timing and retrieval path, 'verbose' = detailed metrics. Use when debugging query issues.
         """
         from memoria.core.explain import init_explain, clear_explain
 
-        # Initialize explain context
+        # Initialize explain context (handles bool → str conversion internally)
         explain_ctx = init_explain(explain)
 
         try:

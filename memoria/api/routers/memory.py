@@ -40,8 +40,9 @@ class RetrieveRequest(BaseModel):
     memory_types: list[str] | None = None
     session_id: str | None = None
     include_cross_session: bool = True
-    explain: str = Field(
-        default="none", description="Explain level: none, basic, verbose, analyze"
+    explain: bool | str = Field(
+        default="none",
+        description="false (default) = no debug, true = show timing, 'verbose' = detailed metrics, 'analyze' = full diagnostics. Use only when debugging.",
     )
 
 
@@ -67,8 +68,9 @@ class PurgeRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
     top_k: int = Field(default=10, ge=1, le=100)
-    explain: str = Field(
-        default="none", description="Explain level: none, basic, verbose, analyze"
+    explain: bool | str = Field(
+        default="none",
+        description="false (default) = no debug, true = show timing, 'verbose' = detailed metrics. Use only when debugging.",
     )
 
 
@@ -251,7 +253,7 @@ def retrieve_memories(
 ) -> dict[str, Any]:
     from memoria.core.memory.types import MemoryType
 
-    # Initialize explain context
+    # Initialize explain context (handles bool → str conversion internally)
     explain_ctx = init_explain(req.explain)
 
     try:
@@ -314,7 +316,7 @@ def search_memories(
     user_id: str = Depends(get_current_user_id),
     db_factory=Depends(get_db_factory),
 ) -> dict[str, Any]:
-    # Initialize explain context
+    # Initialize explain context (handles bool → str conversion internally)
     explain_ctx = init_explain(req.explain)
 
     try:

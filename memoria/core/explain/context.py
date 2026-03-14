@@ -123,16 +123,18 @@ def get_explain_ctx() -> ExplainContext | None:
     return _explain_ctx.get()
 
 
-def init_explain(level: ExplainLevel | str) -> ExplainContext | None:
+def init_explain(level: ExplainLevel | str | bool) -> ExplainContext | None:
     """Initialize explain context for current request.
 
     Args:
-        level: Explain level (enum or string)
+        level: Explain level (enum, string, or bool: False/'none' = disabled, True/'basic' = enabled)
 
     Returns:
         ExplainContext or None if level is NONE
     """
-    if isinstance(level, str):
+    if isinstance(level, bool):
+        level = ExplainLevel.BASIC if level else ExplainLevel.NONE
+    elif isinstance(level, str):
         try:
             level = ExplainLevel(level)
         except ValueError:
