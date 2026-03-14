@@ -298,7 +298,7 @@ class EmbeddedBackend(MemoryBackend):
             query,
             query_embedding=query_embedding,
             top_k=top_k,
-            session_id=session_id or "",
+            session_id=session_id or None,
             explain=explain,
         )
 

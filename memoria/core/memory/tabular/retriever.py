@@ -342,6 +342,7 @@ class MemoryRetriever(DbConsumer):
         stats = _PhaseStats()
 
         from memoria.core.memory.models.memory import MemoryRecord as M
+        from memoria.core.memory.models.memory_stats import MemoryStats
 
         rel = _relevance_expr(w_time, w_conf, self.decay_hours, self.half_life_days)
         type_values = base_params["types"]
@@ -350,17 +351,24 @@ class MemoryRetriever(DbConsumer):
         include_cross = base_params["include_cross"]
 
         def _base_query():
-            q = db.query(
-                M.memory_id,
-                M.content,
-                M.memory_type,
-                M.initial_confidence,
-                M.observed_at,
-                M.session_id,
-                M.trust_tier,
-                M.access_count,
-                rel,
-            ).filter(M.user_id == uid, M.is_active > 0, M.memory_type.in_(type_values))
+            # JOIN with stats table to get access_count
+            q = (
+                db.query(
+                    M.memory_id,
+                    M.content,
+                    M.memory_type,
+                    M.initial_confidence,
+                    M.observed_at,
+                    M.session_id,
+                    M.trust_tier,
+                    MemoryStats.access_count,
+                    rel,
+                )
+                .outerjoin(MemoryStats, M.memory_id == MemoryStats.memory_id)
+                .filter(
+                    M.user_id == uid, M.is_active > 0, M.memory_type.in_(type_values)
+                )
+            )
             if include_cross:
                 if session_id:
                     from sqlalchemy import or_
@@ -448,6 +456,7 @@ class MemoryRetriever(DbConsumer):
         from matrixone.sqlalchemy_ext import l2_distance
 
         from memoria.core.memory.models.memory import MemoryRecord as M
+        from memoria.core.memory.models.memory_stats import MemoryStats
 
         dist_expr = l2_distance(M.embedding, query_embedding).label("l2_dist")
         uid = base_params["uid"]
@@ -456,21 +465,26 @@ class MemoryRetriever(DbConsumer):
         include_cross = base_params["include_cross"]
 
         try:
-            q = db.query(
-                M.memory_id,
-                M.content,
-                M.memory_type,
-                M.initial_confidence,
-                M.observed_at,
-                M.session_id,
-                M.trust_tier,
-                M.access_count,
-                dist_expr,
-            ).filter(
-                M.user_id == uid,
-                M.is_active > 0,
-                M.memory_type.in_(type_values),
-                M.embedding.isnot(None),
+            # JOIN with stats table to get access_count
+            q = (
+                db.query(
+                    M.memory_id,
+                    M.content,
+                    M.memory_type,
+                    M.initial_confidence,
+                    M.observed_at,
+                    M.session_id,
+                    M.trust_tier,
+                    MemoryStats.access_count,
+                    dist_expr,
+                )
+                .outerjoin(MemoryStats, M.memory_id == MemoryStats.memory_id)
+                .filter(
+                    M.user_id == uid,
+                    M.is_active > 0,
+                    M.memory_type.in_(type_values),
+                    M.embedding.isnot(None),
+                )
             )
             if include_cross:
                 if session_id:
@@ -643,17 +657,24 @@ class MemoryRetriever(DbConsumer):
         )
 
     def _bump_access_counts(self, memory_ids: list[str]) -> None:
-        """Increment access_count for retrieved memories (best-effort)."""
+        """Increment access_count in stats table (separated from main table)."""
         if not memory_ids:
             return
         try:
             with self._db() as db:
-                placeholders = ",".join(f":id{i}" for i in range(len(memory_ids)))
-                params = {f"id{i}": mid for i, mid in enumerate(memory_ids)}
+                # Batch upsert using INSERT ... ON DUPLICATE KEY UPDATE
+                # Each memory_id gets its own row with access_count=1
+                values_parts = []
+                params = {}
+                for i, mid in enumerate(memory_ids):
+                    values_parts.append(f"(:mid{i}, 1, NOW())")
+                    params[f"mid{i}"] = mid
+                values = ", ".join(values_parts)
                 db.execute(
                     text(
-                        f"UPDATE mem_memories SET access_count = access_count + 1 "
-                        f"WHERE memory_id IN ({placeholders})"
+                        f"INSERT INTO mem_memories_stats (memory_id, access_count, last_accessed_at) "
+                        f"VALUES {values} "
+                        f"ON DUPLICATE KEY UPDATE access_count = access_count + 1, last_accessed_at = NOW()"
                     ),
                     params,
                 )
