@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from memoria.core.explain import set_explain_path
 from memoria.core.memory.graph.retriever import ActivationRetriever
 from memoria.core.memory.types import Memory, MemoryType, TrustTier
 
@@ -128,6 +129,7 @@ class ActivationRetrievalStrategy:
                 user_id,
                 len(graph_memories),
             )
+            set_explain_path("graph")
             explain_info = (
                 {"path": "graph", "results": len(graph_memories)} if explain else None
             )
@@ -161,6 +163,7 @@ class ActivationRetrievalStrategy:
         merged = pool[:top_k]
 
         path = "graph+vector" if graph_memories else "vector_fallback"
+        set_explain_path(path)
         logger.info(
             "activation:v1 %s — user=%s graph=%d vector=%d merged=%d",
             path,
