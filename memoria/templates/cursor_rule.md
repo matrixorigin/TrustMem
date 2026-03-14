@@ -1,4 +1,4 @@
-<!-- memoria-version: 0.1.15-->
+<!-- memoria-version: 0.1.16-->
 
 # Memory Integration (Memoria Lite)
 
