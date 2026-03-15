@@ -210,7 +210,12 @@ def list_memories(
         if limit > 500:
             limit = 500
         q = db.query(
-            M.memory_id, M.content, M.memory_type, M.initial_confidence, M.observed_at
+            M.memory_id,
+            M.content,
+            M.memory_type,
+            M.initial_confidence,
+            M.observed_at,
+            M.session_id,
         ).filter(
             M.user_id == user_id,
             M.is_active > 0,
@@ -237,6 +242,7 @@ def list_memories(
                 "content": r.content,
                 "memory_type": r.memory_type,
                 "confidence": r.initial_confidence,
+                "session_id": r.session_id,
                 "observed_at": r.observed_at.strftime(_CURSOR_FMT)
                 if r.observed_at
                 else None,
@@ -538,18 +544,22 @@ def get_memory(
     """Get a single memory by ID."""
     _verify_ownership(db_factory, memory_id, user_id)
     from memoria.core.memory.models.memory import MemoryRecord as M
+
     with db_factory() as db:
         row = db.query(M).filter(M.memory_id == memory_id, M.user_id == user_id).first()
     if not row:
         raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found")
     from memoria.core.memory.types import MemoryType, TrustTier, Memory
+
     mem = Memory(
         memory_id=row.memory_id,
         user_id=row.user_id,
         memory_type=MemoryType(row.memory_type),
         content=row.content,
         initial_confidence=row.initial_confidence,
-        trust_tier=TrustTier(row.trust_tier) if row.trust_tier else TrustTier.T3_INFERRED,
+        trust_tier=TrustTier(row.trust_tier)
+        if row.trust_tier
+        else TrustTier.T3_INFERRED,
         session_id=row.session_id,
         observed_at=row.observed_at,
     )
