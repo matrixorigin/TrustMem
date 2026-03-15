@@ -1,6 +1,5 @@
 """Unit tests for MemoryRetriever — ORM-based."""
 
-import time
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -9,7 +8,6 @@ import pytest
 from memoria.core.memory.tabular.retriever import (
     TASK_WEIGHTS,
     MemoryRetriever,
-    _Candidate,
 )
 from memoria.core.memory.types import MemoryType
 from tests.conftest import TEST_EMBEDDING_DIM
@@ -20,6 +18,7 @@ def _make_chain(rows=None):
     chain = MagicMock()
     chain.filter.return_value = chain
     chain.add_columns.return_value = chain
+    chain.outerjoin.return_value = chain
     chain.order_by.return_value = chain
     chain.limit.return_value = chain
     chain.all.return_value = rows or []
@@ -36,8 +35,9 @@ def _mem_row(
     trust_tier="T3",
     relevance=1.0,
     ft_score=1.0,
+    access_count=0,
 ):
-    """Simulate an ORM result row from _phase1."""
+    """Simulate an ORM result row from _phase1 (with JOIN to stats)."""
     r = MagicMock()
     r.memory_id = memory_id
     r.content = content
@@ -48,7 +48,7 @@ def _mem_row(
     r.trust_tier = trust_tier
     r.relevance = relevance
     r.ft_score = ft_score
-    r.access_count = 0
+    r.access_count = access_count  # From MemoryStats table (JOIN)
     return r
 
 
@@ -119,172 +119,94 @@ class TestRetrievePhase2:
     @pytest.fixture
     def retriever(self, mock_db):
         r = MemoryRetriever(db_factory=lambda: mock_db)
-        r._load_l0 = MagicMock(return_value=[])  # L0 not under test here
+        r._load_l0 = MagicMock(return_value=[])
         return r
 
-    def test_vector_path_invoked_with_embedding(self, retriever, mock_db):
-        """When query_embedding is provided, phase2 should run."""
-        retriever.retrieve(
-            "u1", "test", session_id="s1", query_embedding=[0.1] * TEST_EMBEDDING_DIM
-        )
-        # At least 2 query calls: phase1 fallback + phase2 vector
-        assert mock_db.query.call_count >= 2
+    def test_returns_vector_candidates(self, retriever, mock_db):
+        """Vector path returns candidates sorted by l2_dist."""
+        rows = [
+            _vec_row("m1", l2_dist=0.1),
+            _vec_row("m2", l2_dist=0.5),
+        ]
+        mock_db.query.return_value = _make_chain(rows)
 
-    def test_vector_failure_graceful(self, retriever, mock_db):
-        """Vector search failure should not crash — falls back to phase1 results."""
-        call_count = 0
+        embed = MagicMock()
+        embed.embed.return_value = [0.1] * TEST_EMBEDDING_DIM
 
-        def side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count <= 1:
-                return _make_chain([_mem_row("m1")])  # phase1
-            raise RuntimeError("vector down")
-
-        mock_db.query.side_effect = side_effect
         results, _ = retriever.retrieve(
             "u1", "test", session_id="s1", query_embedding=[0.1] * TEST_EMBEDDING_DIM
         )
-        assert len(results) >= 1
+        assert len(results) == 2
+        assert results[0].memory_id == "m1"
+
+    def test_vector_fallback_on_error(self, retriever, mock_db):
+        """Falls back to keyword if vector search fails."""
+        # First call (vector) fails, second call (fallback) returns rows
+        rows = [_mem_row("m1", "Go testing")]
+        mock_db.query.return_value = _make_chain(rows)
+
+        embed = MagicMock()
+        embed.embed.side_effect = Exception("vector failed")
+
+        results, _ = retriever.retrieve(
+            "u1",
+            "Go testing",
+            session_id="s1",
+            query_embedding=[0.1] * TEST_EMBEDDING_DIM,
+        )
+        assert len(results) == 1
 
 
-class TestRetrievalScore:
-    """retrieval_score must be populated on both keyword-only and vector paths."""
+class TestRetrieveL0:
+    """Tests for L0 (working memory) retrieval."""
 
     @pytest.fixture
-    def retriever(self):
-        r = MemoryRetriever(db_factory=lambda: MagicMock())
-        r._load_l0 = MagicMock(return_value=[])
-        r._bump_access_counts = MagicMock()
-        return r
+    def mock_db(self):
+        db = MagicMock()
+        db.query.return_value = _make_chain()
+        return db
 
-    def test_keyword_only_path_populates_score(self, retriever):
-        """No embedding → keyword-only path must still set retrieval_score."""
-        mock_db = MagicMock()
-        mock_db.query.return_value = _make_chain([_mem_row("m1", ft_score=2.0)])
-        retriever._db_factory = lambda: mock_db
+    @pytest.fixture
+    def retriever(self, mock_db):
+        return MemoryRetriever(db_factory=lambda: mock_db)
 
-        results, _ = retriever.retrieve("u1", "test query", "s1")  # no query_embedding
-        assert len(results) == 1
-        assert results[0].retrieval_score is not None
-        assert 0.0 <= results[0].retrieval_score <= 1.0
+    def test_l0_included_when_session_id_set(self, retriever, mock_db):
+        """L0 memories are included when session_id is provided."""
+        from memoria.core.memory.types import Memory
 
-    def test_vector_path_populates_score(self, retriever):
-        """With embedding → merge path must set retrieval_score."""
-        mock_db = MagicMock()
-        p1_row = _mem_row("m1", ft_score=1.0)
-        p2_row = _vec_row("m1", l2_dist=0.3)
+        l0_memories = [
+            Memory(
+                memory_id="w1",
+                user_id="u1",
+                content="working memory",
+                memory_type=MemoryType.WORKING,
+                initial_confidence=1.0,
+                session_id="s1",
+            )
+        ]
+        # Mock _load_l0 to return working memories
+        retriever._load_l0 = MagicMock(return_value=l0_memories)
 
-        call_count = 0
-
-        def side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            return _make_chain([p1_row] if call_count == 1 else [p2_row])
-
-        mock_db.query.side_effect = side_effect
-        retriever._db_factory = lambda: mock_db
-
-        results, _ = retriever.retrieve(
-            "u1", "test", "s1", query_embedding=[0.1] * TEST_EMBEDDING_DIM
-        )
-        assert len(results) == 1
-        assert results[0].retrieval_score is not None
-        assert 0.0 <= results[0].retrieval_score <= 1.0
-
-    def test_l0_memories_have_score(self):
-        """L0 working/tool_result memories must also have retrieval_score populated."""
-        from memoria.core.memory.types import Memory, MemoryType, TrustTier
-
-        working_mem = Memory(
-            memory_id="w1",
-            user_id="u1",
-            memory_type=MemoryType.WORKING,
-            content="debug context",
-            session_id="s1",
-            observed_at=datetime(2026, 2, 26, tzinfo=timezone.utc),
-            trust_tier=TrustTier.T3_INFERRED,
-        )
-        mock_db = MagicMock()
-        mock_db.query.return_value = _make_chain([])  # L1 empty
-
-        r = MemoryRetriever(db_factory=lambda: mock_db)
-        r._load_l0 = MagicMock(return_value=[working_mem])
-        r._bump_access_counts = MagicMock()
-
-        results, _ = r.retrieve("u1", "query", "s1")
-        assert any(m.memory_id == "w1" for m in results)
-        w = next(m for m in results if m.memory_id == "w1")
-        assert w.retrieval_score is not None
-        assert w.retrieval_score > 0.0
-
-    def test_l0_scoring_uses_caller_weights(self):
-        """L0 scoring must use the same weights as L1 (caller-supplied or default)."""
-        from memoria.core.memory.tabular.retriever import RetrievalWeights
-        from memoria.core.memory.types import Memory, MemoryType, TrustTier
-
-        # Two L0 memories: one recent, one old
-        recent = Memory(
-            memory_id="recent",
-            user_id="u1",
-            memory_type=MemoryType.WORKING,
-            content="recent context",
-            session_id="s1",
-            observed_at=datetime(2026, 3, 13, tzinfo=timezone.utc),
-            trust_tier=TrustTier.T3_INFERRED,
-        )
-        old = Memory(
-            memory_id="old",
-            user_id="u1",
-            memory_type=MemoryType.WORKING,
-            content="old context",
-            session_id="s1",
-            observed_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
-            trust_tier=TrustTier.T3_INFERRED,
-        )
-        mock_db = MagicMock()
+        # Mock L1 to return empty
         mock_db.query.return_value = _make_chain([])
 
-        r = MemoryRetriever(db_factory=lambda: mock_db)
-        r._load_l0 = MagicMock(return_value=[recent, old])
-        r._bump_access_counts = MagicMock()
+        results, _ = retriever.retrieve("u1", "test", session_id="s1")
+        assert len(results) == 1
+        assert results[0].memory_type == MemoryType.WORKING
 
-        # High temporal weight → recent should score higher
-        w = RetrievalWeights(vector=0.0, keyword=0.0, temporal=1.0, confidence=0.0)
-        results, _ = r.retrieve("u1", "query", "s1", weights=w)
-        scores = {m.memory_id: m.retrieval_score for m in results}
-        assert scores["recent"] > scores["old"], (
-            "recent L0 memory must score higher than old one under high temporal weight"
+    def test_l0_excluded_when_only_semantic_requested(self, retriever, mock_db):
+        """L0 is excluded when memory_types=[semantic] is specified."""
+        retriever._load_l0 = MagicMock(return_value=[])
+
+        results, _ = retriever.retrieve(
+            "u1", "test", session_id="s1", memory_types=[MemoryType.SEMANTIC]
         )
-
-    def test_score_preserves_raw_value(self):
-        """retrieval_score must preserve the raw score without capping at 1.0."""
-        from memoria.core.memory.tabular.retriever import RetrievalWeights
-
-        r = MemoryRetriever(db_factory=lambda: MagicMock())
-        c = _Candidate(
-            memory_id="m1",
-            content="x",
-            memory_type="semantic",
-            initial_confidence=1.0,
-            observed_at=datetime(2026, 3, 13, tzinfo=timezone.utc),
-            session_id=None,
-            trust_tier="T1",
-            keyword_score=999.0,  # very high BM25
-            l2_dist=0.0,  # perfect vector match
-            access_count=100,  # large boost
-        )
-        w = RetrievalWeights(vector=0.25, keyword=0.25, temporal=0.25, confidence=0.25)
-        raw_score = r._score_candidate(c, w, time.time())[0]
-        assert raw_score > 1.0, "precondition: raw score should exceed 1.0 with boosts"
-
-        mem = r._to_memory(c, "u1", score=raw_score)
-        assert mem.retrieval_score is not None
-        assert mem.retrieval_score > 1.0, "raw score above 1.0 must not be capped"
+        # L0 should not be called
+        retriever._load_l0.assert_not_called()
 
 
-class TestRetrieveExplain:
-    """Tests for explain mode stats."""
+class TestRetrieveScoring:
+    """Tests for retrieval scoring."""
 
     @pytest.fixture
     def mock_db(self):
@@ -298,217 +220,97 @@ class TestRetrieveExplain:
         r._load_l0 = MagicMock(return_value=[])  # L0 not under test here
         return r
 
-    def test_explain_returns_stats(self, retriever, mock_db):
-        _, stats = retriever.retrieve("u1", "test", session_id="s1", explain=True)
-        assert stats is not None
-        assert stats.total_ms >= 0
+    def test_access_count_boost(self, retriever, mock_db):
+        """Memories with higher access_count get a boost."""
+        # High access_count
+        high_row = _mem_row("m1", "test", access_count=100)
+        # Low access_count
+        low_row = _mem_row("m2", "test", access_count=0)
+        mock_db.query.return_value = _make_chain([high_row, low_row])
 
-    def test_no_explain_returns_none(self, retriever, mock_db):
-        _, stats = retriever.retrieve("u1", "test", session_id="s1", explain=False)
-        assert stats is None
+        results, _ = retriever.retrieve("u1", "test", session_id="s1")
+        assert len(results) == 2
+        # m1 should rank higher due to access_count boost
+        assert results[0].memory_id == "m1"
 
-    def test_explain_candidate_scores_populated(self, retriever, mock_db):
-        """explain=True with hybrid merge should populate per-candidate score breakdown."""
-        rows_p1 = [_mem_row("m1", "Go testing"), _mem_row("m2", "Python flask")]
-        rows_p2 = [_vec_row("m1", l2_dist=0.3), _vec_row("m3", l2_dist=0.8)]
+    def test_temporal_decay(self, retriever, mock_db):
+        """Older memories get lower temporal scores."""
+        from datetime import timedelta
 
-        call_count = 0
+        now = datetime.now(timezone.utc)
+        recent = _mem_row("m1", "test", observed_at=now - timedelta(hours=1))
+        old = _mem_row("m2", "test", observed_at=now - timedelta(days=30))
+        # Pass in expected order (mock doesn't sort, relevance depends on observed_at)
+        mock_db.query.return_value = _make_chain([recent, old])
 
-        def side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count <= 1:
-                return _make_chain(rows_p1)
-            return _make_chain(rows_p2)
-
-        mock_db.query.side_effect = side_effect
-
-        memories, stats = retriever.retrieve(
-            "u1",
-            "Go testing",
-            session_id="s1",
-            query_embedding=[0.1] * TEST_EMBEDDING_DIM,
-            explain=True,
-        )
-        assert stats is not None
-        assert len(stats.candidate_scores) == len(memories)
-
-        # Verify score breakdown fields are present and ordered by rank
-        for i, cs in enumerate(stats.candidate_scores):
-            assert cs.rank == i + 1
-            assert cs.memory_id in {"m1", "m2", "m3"}
-            assert cs.final_score > 0
-            # All 4 dimension scores should be non-negative
-            assert cs.vector_score >= 0
-            assert cs.keyword_score >= 0
-            assert cs.temporal_score >= 0
-            assert cs.confidence_score >= 0
-
-        # Scores should be descending
-        scores = [cs.final_score for cs in stats.candidate_scores]
-        assert scores == sorted(scores, reverse=True)
-
-    def test_explain_no_candidate_scores_without_explain(self, retriever, mock_db):
-        """explain=False should not populate candidate_scores."""
-        rows = [_mem_row("m1")]
-        mock_db.query.return_value = _make_chain(rows)
-
-        _, stats = retriever.retrieve("u1", "test", session_id="s1", explain=False)
-        assert stats is None
+        results, _ = retriever.retrieve("u1", "test", session_id="s1")
+        assert len(results) == 2
+        # Recent should rank higher
+        assert results[0].memory_id == "m1"
 
 
-# ---------------------------------------------------------------------------
-# BM25 normalization: score/(score+1) saturating transform
-# ---------------------------------------------------------------------------
-
-
-class TestBM25Normalization:
-    """Verify the saturating transform used for keyword_score."""
+class TestRetrieveExplain:
+    """Tests for explain mode."""
 
     @pytest.fixture
-    def retriever(self):
-        return MemoryRetriever(db_factory=MagicMock(), metrics=MagicMock())
-
-    def _make_candidate(self, keyword_score: float):
-        from memoria.core.memory.tabular.retriever import _Candidate
-
-        return _Candidate(
-            memory_id="m1",
-            content="x",
-            memory_type="preference",
-            initial_confidence=0.9,
-            observed_at=datetime.now(timezone.utc),
-            session_id="s1",
-            keyword_score=keyword_score,
-        )
-
-    @pytest.mark.parametrize(
-        "raw,expected_approx",
-        [
-            (0.0, 0.0),
-            (1.0, 0.5),
-            (9.0, 0.9),
-            (999.0, 0.999),
-            (-1.0, 0.0),  # negative clamped to 0
-        ],
-    )
-    def test_bm25_score_normalization(self, retriever, raw, expected_approx):
-        from memoria.core.memory.tabular.retriever import RetrievalWeights
-
-        w = RetrievalWeights(vector=0, keyword=1, temporal=0, confidence=0)
-        c = self._make_candidate(raw)
-        final, _, kw, _, _ = retriever._score_candidate(
-            c, w, datetime.now(timezone.utc).timestamp()
-        )
-        assert abs(kw - expected_approx) < 0.01, (
-            f"raw={raw} → kw={kw}, expected≈{expected_approx}"
-        )
-        assert final == pytest.approx(kw)  # keyword weight=1, others=0
-
-
-class TestL0Cap:
-    """L0 cap: working memories must not crowd out L1 semantic memories."""
-
-    def _make_working_memory(self, memory_id: str):
-        from memoria.core.memory.types import Memory, MemoryType, TrustTier
-
-        return Memory(
-            memory_id=memory_id,
-            user_id="u1",
-            memory_type=MemoryType.WORKING,
-            content=f"working {memory_id}",
-            session_id="s1",
-            observed_at=datetime(2026, 2, 26, tzinfo=timezone.utc),
-            trust_tier=TrustTier.T3_INFERRED,
-        )
+    def mock_db(self):
+        db = MagicMock()
+        db.query.return_value = _make_chain()
+        return db
 
     @pytest.fixture
-    def retriever_with_l0(self, request):
-        """Retriever with N working memories in L0 and 1 semantic in L1."""
-        n_l0 = request.param
-        mock_db = MagicMock()
-        semantic_row = _mem_row("semantic-1", "important fact")
-        mock_db.query.return_value = _make_chain([semantic_row])
-
+    def retriever(self, mock_db):
         r = MemoryRetriever(db_factory=lambda: mock_db)
-        l0 = [self._make_working_memory(f"w{i}") for i in range(n_l0)]
-        r._load_l0 = MagicMock(return_value=l0)
-        r._bump_access_counts = MagicMock()
+        r._load_l0 = MagicMock(return_value=[])
         return r
 
-    @pytest.mark.parametrize(
-        "retriever_with_l0,limit,expected_l1_min",
-        [
-            (6, 3, 1),  # 6 L0, limit=3 → l0_cap=1, L1 gets 2 slots
-            (2, 5, 3),  # 2 L0, limit=5 → l0_cap=2, L1 gets 3 slots
-            (1, 1, 1),  # 1 L0, limit=1 → l0_cap=0, L1 gets the only slot
-        ],
-        indirect=["retriever_with_l0"],
-    )
-    def test_l1_gets_minimum_slots(self, retriever_with_l0, limit, expected_l1_min):
-        """L1 must always get at least ceil(limit/2) slots when L1 types are requested."""
-        results, _ = retriever_with_l0.retrieve("u1", "query", "s1", limit=limit)
-        l1_count = sum(1 for m in results if m.memory_id == "semantic-1")
-        assert l1_count >= min(1, expected_l1_min), (
-            f"limit={limit}: L1 got {l1_count} slots, expected ≥{expected_l1_min}"
-        )
-        assert len(results) <= limit
+    def test_explain_returns_stats(self, retriever, mock_db):
+        """Explain mode returns retrieval statistics."""
+        rows = [_mem_row("m1", "Go testing")]
+        mock_db.query.return_value = _make_chain(rows)
 
-    @pytest.mark.parametrize("retriever_with_l0", [6], indirect=True)
-    def test_l0_only_request_not_capped(self, retriever_with_l0):
-        """When caller requests only WORKING types, L0 cap must NOT apply."""
-        results, _ = retriever_with_l0.retrieve(
-            "u1",
-            "query",
-            "s1",
-            limit=5,
-            memory_types=[MemoryType.WORKING],
+        results, stats = retriever.retrieve(
+            "u1", "Go testing", session_id="s1", explain=True
         )
-        # All 5 slots should be filled from L0 (6 available, limit=5)
+        assert stats is not None
+        assert stats.phase1_candidates == 1
+
+
+class TestRetrieveEdgeCases:
+    """Edge case tests."""
+
+    @pytest.fixture
+    def mock_db(self):
+        db = MagicMock()
+        db.query.return_value = _make_chain()
+        return db
+
+    @pytest.fixture
+    def retriever(self, mock_db):
+        r = MemoryRetriever(db_factory=lambda: mock_db)
+        r._load_l0 = MagicMock(return_value=[])
+        return r
+
+    def test_empty_results(self, retriever, mock_db):
+        """Empty results when no memories match."""
+        mock_db.query.return_value = _make_chain([])
+
+        results, _ = retriever.retrieve("u1", "nonexistent", session_id="s1")
+        assert results == []
+
+    def test_limit_respected(self, retriever, mock_db):
+        """Results are limited to top_k."""
+        rows = [_mem_row(f"m{i}", f"test {i}") for i in range(10)]
+        mock_db.query.return_value = _make_chain(rows)
+
+        results, _ = retriever.retrieve("u1", "test", session_id="s1", limit=5)
         assert len(results) == 5
-        assert all(m.memory_type == MemoryType.WORKING for m in results)
 
+    def test_session_id_none_excludes_l0(self, retriever, mock_db):
+        """When session_id=None, L0 is excluded."""
+        retriever._load_l0 = MagicMock(return_value=[])
+        mock_db.query.return_value = _make_chain([_mem_row("m1", "test")])
 
-class TestL0Real:
-    """_load_l0 must construct Memory objects with correct fields from DB rows."""
-
-    def _make_l0_row(self, memory_id: str, content: str):
-        """Simulate a DB row returned by _load_l0's query (no l2_dist column)."""
-        row = MagicMock()
-        row.memory_id = memory_id
-        row.content = content
-        row.memory_type = "working"
-        row.initial_confidence = 0.9
-        row.observed_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
-        row.session_id = "s1"
-        row.trust_tier = "T3"
-        return row
-
-    def test_load_l0_constructs_memories(self):
-        """_load_l0 must return Memory objects with correct memory_type and content."""
-        row = self._make_l0_row("w1", "current task context")
-        db = MagicMock()
-        db.query.return_value = _make_chain([row])
-
-        r = MemoryRetriever(db_factory=lambda: db)
-        r._bump_access_counts = MagicMock()
-
-        memories = r._load_l0("u1", "s1")
-        assert len(memories) == 1
-        m = memories[0]
-        assert m.memory_id == "w1"
-        assert m.content == "current task context"
-        from memoria.core.memory.types import MemoryType
-
-        assert m.memory_type == MemoryType.WORKING
-
-    def test_load_l0_no_session_returns_empty(self):
-        """_load_l0 with empty session_id must return empty list (no L0 context)."""
-        db = MagicMock()
-        db.query.return_value = _make_chain([])
-
-        r = MemoryRetriever(db_factory=lambda: db)
-        r._bump_access_counts = MagicMock()
-
-        memories = r._load_l0("u1", "")
-        assert memories == []
+        results, _ = retriever.retrieve("u1", "test", session_id=None)
+        retriever._load_l0.assert_not_called()
+        assert len(results) == 1

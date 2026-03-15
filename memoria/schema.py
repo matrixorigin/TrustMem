@@ -64,6 +64,7 @@ TABLE_NAMES = [
     "mem_entities",
     "mem_experiments",
     "mem_memories",
+    "mem_memories_stats",  # 统计表：频繁更新，与主表分离
     "mem_memory_entity_links",
     "mem_user_memory_config",
     "mem_user_state",
@@ -160,7 +161,6 @@ def _ddl_statements(dim: int) -> list[str]:
           `embedding`          VECF32({dim}) DEFAULT NULL,
           `source_event_ids`   JSON         NOT NULL,
           `superseded_by`      VARCHAR(64)  DEFAULT NULL,
-          `access_count`       INT          NOT NULL DEFAULT 0,
           `is_active`          SMALLINT     NOT NULL DEFAULT 1,
           `observed_at`        DATETIME(6)  NOT NULL,
           `created_at`         DATETIME(6)  NOT NULL,
@@ -173,6 +173,16 @@ def _ddl_statements(dim: int) -> list[str]:
           KEY `idx_memory_superseded_by` (`superseded_by`),
           KEY `idx_memory_user_active_type_observed` (`user_id`, `is_active`, `memory_type`, `observed_at`),
           FULLTEXT `ft_memory_content`(`content`) WITH PARSER ngram
+        )
+        """,
+        # ── mem_memories_stats ────────────────────────────────────
+        # 统计表：频繁更新的访问计数，与主表分离
+        """
+        CREATE TABLE IF NOT EXISTS `mem_memories_stats` (
+          `memory_id`       VARCHAR(64)  NOT NULL,
+          `access_count`    INT          NOT NULL DEFAULT 0,
+          `last_accessed_at` DATETIME(6) DEFAULT NULL,
+          PRIMARY KEY (`memory_id`)
         )
         """,
         # ── mem_memory_entity_links ────────────────────────────────

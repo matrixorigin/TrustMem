@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -128,10 +129,62 @@ def _verify_ownership(db_factory, memory_id: str, user_id: str):
         db.close()
 
 
-def _get_service(db_factory, user_id: str):
-    from memoria.core.memory.factory import create_memory_service
+# Module-level cache for service dependencies
+# Note: Actual type is MinimalLLMClient | None, but we use Any to avoid import
+_llm_client_cache: Any = None
+_embed_client_cache: Any = None  # EmbeddingClient type, but avoid circular import
+_cache_lock = threading.Lock()
 
-    return create_memory_service(db_factory, user_id=user_id)
+
+def _clear_service_cache() -> None:
+    """Clear the cached LLM and embedding clients.
+
+    Call this when configuration changes (e.g., API key rotation)
+    to force recreation of clients on next request.
+    """
+    global _llm_client_cache, _embed_client_cache
+    with _cache_lock:
+        _llm_client_cache = None
+        _embed_client_cache = None
+
+
+def _get_service(db_factory, user_id: str):
+    """Get or create memory service with cached LLM and embedding clients.
+
+    Clients are cached at module level to avoid creating new instances
+    on every request. This is safe because the clients are stateless.
+    """
+    from memoria.core.memory.factory import create_memory_service
+    from memoria.core.llm import get_llm_client
+    from memoria.core.embedding import get_embedding_client
+
+    global _llm_client_cache, _embed_client_cache
+
+    # Thread-safe lazy initialization with caching
+    if _llm_client_cache is None:
+        with _cache_lock:
+            # Double-check after acquiring lock
+            if _llm_client_cache is None:
+                client = get_llm_client()
+                if client is not None:
+                    _llm_client_cache = client
+    if _embed_client_cache is None:
+        with _cache_lock:
+            # Double-check after acquiring lock
+            if _embed_client_cache is None:
+                try:
+                    _embed_client_cache = get_embedding_client()
+                except Exception:
+                    _embed_client_cache = None
+
+    embed_fn = _embed_client_cache.embed if _embed_client_cache else None
+
+    return create_memory_service(
+        db_factory,
+        user_id=user_id,
+        llm_client=_llm_client_cache,
+        embed_fn=embed_fn,
+    )
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────

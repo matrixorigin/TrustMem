@@ -55,3 +55,23 @@ class MinimalLLMClient:
             temperature=kwargs.get("temperature", 0.3),
         )
         return resp.choices[0].message.content or ""
+
+    def chat_with_tools(
+        self,
+        messages: list[dict[str, str]],
+        tools: list | None = None,
+        tool_choice: str | None = None,
+        **kwargs,
+    ) -> dict:
+        """Chat with optional tool calling support."""
+        resp = self._client.chat.completions.create(
+            model=kwargs.get("model", self.model),
+            messages=messages,
+            temperature=kwargs.get("temperature", 0.3),
+            tools=tools or [],
+            tool_choice=tool_choice or "auto",
+        )
+        return {
+            "content": resp.choices[0].message.content or "",
+            "tool_calls": resp.choices[0].message.tool_calls or [],
+        }

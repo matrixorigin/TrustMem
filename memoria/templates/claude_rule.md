@@ -1,4 +1,4 @@
-<!-- memoria-version: 0.1.21-->
+<!-- memoria-version: 0.1.22-->
 
 # Memory Integration (Memoria Lite)
 
@@ -44,7 +44,11 @@ If `memory_store` or `memory_correct` response contains ⚠️, tell the user �
 | `memory_search` | User asks "what do you know about X" or you need to browse | `query`, `top_k` (default 10), `explain` (false = no debug, true = show timing) |
 | `memory_profile` | User asks "what do you know about me" | — |
 
-**Debug parameter:** `explain=true` shows execution timing and retrieval path. Use when debugging query issues.
+**Debug parameter:** `explain=true` shows execution timing and retrieval path. **ONLY use when user explicitly asks** to debug performance or investigate why certain memories were/weren't retrieved. **DO NOT use proactively** — it adds overhead and clutters output.
+
+**When to use explain:**
+- ✅ User says: "why is this slow", "show me the retrieval path", "debug this query"
+- ❌ Normal retrieval — never add explain unless user asks
 
 ### Memory types
 | Type | Use for | Examples |
