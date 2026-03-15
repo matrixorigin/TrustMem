@@ -529,6 +529,33 @@ def get_memory_history(
         }
 
 
+@router.get("/memories/{memory_id}")
+def get_memory(
+    memory_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db_factory=Depends(get_db_factory),
+):
+    """Get a single memory by ID."""
+    _verify_ownership(db_factory, memory_id, user_id)
+    from memoria.core.memory.models.memory import MemoryRecord as M
+    with db_factory() as db:
+        row = db.query(M).filter(M.memory_id == memory_id, M.user_id == user_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Memory {memory_id} not found")
+    from memoria.core.memory.types import MemoryType, TrustTier, Memory
+    mem = Memory(
+        memory_id=row.memory_id,
+        user_id=row.user_id,
+        memory_type=MemoryType(row.memory_type),
+        content=row.content,
+        initial_confidence=row.initial_confidence,
+        trust_tier=TrustTier(row.trust_tier) if row.trust_tier else TrustTier.T3_INFERRED,
+        session_id=row.session_id,
+        observed_at=row.observed_at,
+    )
+    return _to_response(mem)
+
+
 @router.delete("/memories/{memory_id}")
 def delete_memory(
     memory_id: str,
