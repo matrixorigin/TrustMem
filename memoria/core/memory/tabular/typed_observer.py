@@ -63,11 +63,14 @@ class TypedObserver:
         messages: list[dict[str, Any]],
         source_event_ids: Optional[list[str]] = None,
         explain: bool = False,
+        session_id: Optional[str] = None,
     ) -> tuple[list[Memory], Optional[ObserverStats]]:
         start = time.time() if explain else 0
         stats = ObserverStats() if explain else None
 
-        candidates = self.extract_candidates(user_id, messages, source_event_ids)
+        candidates = self.extract_candidates(
+            user_id, messages, source_event_ids, session_id=session_id
+        )
         if stats:
             stats.memories_extracted = len(candidates)
 
@@ -92,6 +95,7 @@ class TypedObserver:
         user_id: str,
         messages: list[dict[str, Any]],
         source_event_ids: Optional[list[str]] = None,
+        session_id: Optional[str] = None,
     ) -> list[Memory]:
         """Extract candidate memories WITHOUT persisting. Applies sensitivity filter."""
         if not self.llm:
@@ -108,6 +112,9 @@ class TypedObserver:
             mem = self._parse_item(item, user_id, source_event_ids or [], now)
             if not mem:
                 continue
+
+            if session_id:
+                mem.session_id = session_id
 
             # Sensitivity filter — block HIGH-risk, redact MEDIUM-risk
             sensitivity = check_sensitivity(mem.content)

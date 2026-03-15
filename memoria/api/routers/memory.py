@@ -78,6 +78,7 @@ class SearchRequest(BaseModel):
 class ObserveRequest(BaseModel):
     messages: list[dict[str, Any]] = Field(..., min_length=1)
     source_event_ids: list[str] | None = None
+    session_id: str | None = None
 
 
 _CURSOR_FMT = "%Y-%m-%d %H:%M:%S.%f"
@@ -98,6 +99,8 @@ def _to_response(mem: Any) -> dict[str, Any]:
         "memory_type": mem_type_str,
         "trust_tier": trust_tier_str,
         "confidence": getattr(mem, "initial_confidence", None),
+        "initial_confidence": getattr(mem, "initial_confidence", None),
+        "session_id": getattr(mem, "session_id", None),
         "observed_at": mem.observed_at.isoformat()
         if hasattr(mem, "observed_at") and mem.observed_at
         else None,
@@ -667,7 +670,10 @@ def observe_turn(
 
     svc = _get_service(db_factory, user_id=user_id)
     memories = svc.observe_turn(
-        user_id, req.messages, source_event_ids=req.source_event_ids
+        user_id,
+        req.messages,
+        source_event_ids=req.source_event_ids,
+        session_id=req.session_id,
     )
     result: dict = {"memories": [_to_response(m) for m in memories]}
     if get_llm_client() is None:
